@@ -51,7 +51,7 @@ public class Reservation {
     @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
 
-    @Column(name = "end_date", nullable = false, updatable = false)
+    @Column(name = "end_date", nullable = false)
     private LocalDate endDate;
 
     @Enumerated(EnumType.STRING)
@@ -137,10 +137,10 @@ public class Reservation {
      * <ul>
      *   <li>the unit is back at the desk: no other reservation of it is PICKED_UP;</li>
      *   <li>no other active reservation of the unit falls on any day from today up to the day
-     *       before startDate;</li>
-     *   <li>the booking would still cover at most {@value #MAX_DAYS} days.</li>
+     *       before startDate.</li>
      * </ul>
-     * Then startDate moves to today; endDate never changes. {@code unitBookings} is the unit's
+     * Then startDate moves to today. The booking still covers at most {@value #MAX_DAYS} days:
+     * if endDate is later than today + {@value #MAX_DAYS} - 1, it moves back to that day. {@code unitBookings} is the unit's
      * active reservations, loaded by the data source layer while the unit row is locked.
      */
     public void pickUp(LocalDate today, Instant now, Collection<Reservation> unitBookings) {
@@ -157,11 +157,6 @@ public class Reservation {
     }
 
     private void moveStartEarlierFor(LocalDate today, Collection<Reservation> unitBookings) {
-        if (endDate.isAfter(today.plusDays(MAX_DAYS - 1))) {
-            throw new DomainRuleViolation(DomainRuleViolation.INVALID_RESERVATION_STATE,
-                    "Picking up on " + today + " would make this booking longer than " + MAX_DAYS
-                            + " days; the earliest pickup is " + endDate.minusDays(MAX_DAYS - 1) + ".");
-        }
         LocalDate dayBeforeStart = startDate.minusDays(1);
         for (Reservation other : unitBookings) {
             if (other == this || other.publicId.equals(publicId) || !other.isActive()) {
@@ -178,6 +173,10 @@ public class Reservation {
             }
         }
         startDate = today;
+        LocalDate latestEnd = today.plusDays(MAX_DAYS - 1);
+        if (endDate.isAfter(latestEnd)) {
+            endDate = latestEnd;
+        }
     }
 
     /**
