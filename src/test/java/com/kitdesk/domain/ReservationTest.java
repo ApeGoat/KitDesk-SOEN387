@@ -243,6 +243,59 @@ class ReservationTest {
     }
 
     @Nested
+    class ReassignToIdenticalUnit {
+
+        final Unit sameModel = new Unit("CAM-R5-01", r5);
+        final Unit otherModel = new Unit("CAM-A7-01", new EquipmentModel(cameras, "Sony", "A7 IV", null));
+        final User bob = new User("bob@kitdesk.test", "hash", "Bob", Role.STUDENT, true);
+
+        @Test
+        void movesToAFreeUnitOfTheSameModelKeepingTheDates() {
+            Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
+            r.reassignTo(sameModel, List.of());
+            assertThat(r.getUnit()).isSameAs(sameModel);
+            assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(1));
+            assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(3));
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        }
+
+        @Test
+        void refusesADifferentModel() {
+            Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
+            assertRule(() -> r.reassignTo(otherModel, List.of()), DomainRuleViolation.INVALID_REQUEST);
+            assertThat(r.getUnit()).isSameAs(unit);
+        }
+
+        @Test
+        void refusesTheSameUnit() {
+            Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
+            assertRule(() -> r.reassignTo(unit, List.of()), DomainRuleViolation.INVALID_REQUEST);
+        }
+
+        @Test
+        void refusesAReplacementBookedOnAnyDayOfTheBooking() {
+            Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
+            Reservation bobOnReplacement = Reservation.create(bob, sameModel, TODAY.plusDays(3), TODAY.plusDays(4), TODAY, NOW);
+            assertRule(() -> r.reassignTo(sameModel, List.of(bobOnReplacement)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertThat(r.getUnit()).isSameAs(unit);
+        }
+
+        @Test
+        void refusesAnOutOfServiceReplacement() {
+            org.springframework.test.util.ReflectionTestUtils.setField(sameModel, "active", false);
+            Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
+            assertRule(() -> r.reassignTo(sameModel, List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
+        }
+
+        @Test
+        void onlyBookingsNotYetPickedUpCanMove() {
+            Reservation r = book(TODAY, TODAY.plusDays(3));
+            r.pickUp(TODAY, NOW, List.of());
+            assertRule(() -> r.reassignTo(sameModel, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
+        }
+    }
+
+    @Nested
     class ExpiryAndOverdue {
 
         @Test

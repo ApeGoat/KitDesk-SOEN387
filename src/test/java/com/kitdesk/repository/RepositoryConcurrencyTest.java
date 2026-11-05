@@ -438,6 +438,66 @@ class RepositoryConcurrencyTest {
     }
 
     // ---------------------------------------------------------------------------------------
+    // 3c. Late-return failsafe: two blocked bookings competing for the one spare unit
+    // ---------------------------------------------------------------------------------------
+
+    /** Alice and Bob each booked a camera for days 4..6; both cameras are still out. Only CAM-R5-03 is spare. */
+    List<String> twoBlockedBookings() {
+        Long alice = userId("alice@kitdesk.test");
+        Long bob = userId("bob@kitdesk.test");
+        return tx().execute(s -> List.of(
+                reservations.save(Reservation.create(users.findById(alice).orElseThrow(),
+                        units.findByPublicId(unitId("CAM-R5-01")).orElseThrow(), DAY0.plusDays(4), DAY0.plusDays(6), DAY0, NOW)).getPublicId(),
+                reservations.save(Reservation.create(users.findById(bob).orElseThrow(),
+                        units.findByPublicId(unitId("CAM-R5-02")).orElseThrow(), DAY0.plusDays(4), DAY0.plusDays(6), DAY0, NOW)).getPublicId()));
+    }
+
+    @Test
+    void withTheUnitLockOnlyOneBlockedBookingGetsTheSpareUnit() throws Exception {
+        String spare = unitId("CAM-R5-03");
+        List<Callable<String>> tasks = new ArrayList<>();
+        for (String resId : twoBlockedBookings()) {
+            tasks.add(() -> tx().execute(s -> {
+                Unit replacement = units.lockUnit(spare).orElseThrow();
+                Reservation r = reservations.findByPublicId(resId).orElseThrow();
+                r.reassignTo(replacement, reservations.findActiveByUnit(replacement));
+                reservations.saveAndFlush(r);
+                return resId;
+            }));
+        }
+        List<Outcome<String>> outcomes = Concurrently.run(tasks);
+
+        assertThat(count(outcomes, true)).isEqualTo(1);
+        assertThat(outcomes).filteredOn(o -> !o.succeeded()).singleElement()
+                .satisfies(o -> assertThat(((DomainRuleViolation) o.error()).getCode()).isEqualTo(DomainRuleViolation.UNIT_UNAVAILABLE));
+        assertThat(activeCount(spare)).isEqualTo(1);
+    }
+
+    @Test
+    void withoutLocksTheDatabaseRuleStillStopsTwoBookingsLandingOnTheSpareUnit() throws Exception {
+        String spare = unitId("CAM-R5-03");
+        CyclicBarrier bothChecked = new CyclicBarrier(2);
+        List<Callable<String>> tasks = new ArrayList<>();
+        for (String resId : twoBlockedBookings()) {
+            tasks.add(() -> tx().execute(s -> {
+                Unit replacement = units.findByPublicId(spare).orElseThrow();       // no lock
+                Reservation r = reservations.findByPublicId(resId).orElseThrow();
+                List<Reservation> seen = reservations.findActiveByUnit(replacement);
+                await(bothChecked);
+                r.reassignTo(replacement, seen);
+                reservations.saveAndFlush(r);
+                return resId;
+            }));
+        }
+        List<Outcome<String>> outcomes = Concurrently.run(tasks);
+
+        assertThat(count(outcomes, true)).isEqualTo(1);
+        assertThat(outcomes).filteredOn(o -> !o.succeeded()).singleElement()
+                .satisfies(o -> assertThat(DatabaseConstraints.isReservationOverlap(o.error())).isTrue());
+        assertThat(activeCount(spare)).isEqualTo(1);
+    }
+
+    // ---------------------------------------------------------------------------------------
     // 4. Optimistic locking on status changes
     // ---------------------------------------------------------------------------------------
 

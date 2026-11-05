@@ -145,6 +145,48 @@ class RepositoryQueriesTest {
     }
 
     @Test
+    void blockedBookingsAreThoseWhoseUnitIsStillOutPastItsEndDate() {
+        // Bob had CAM-R5-03 for days 0..2 and hasn't brought it back. Alice booked it from day 4.
+        // On day 4 her booking is blocked; Carol's booking of another camera isn't.
+        User bob = user("bob@kitdesk.test");
+        Unit cam3 = unit("CAM-R5-03");
+        Reservation bobs = book(bob, cam3, 0, 2);
+        bobs.pickUp(DAY0, NOW, java.util.List.of());
+        Reservation alices = book(user("alice@kitdesk.test"), cam3, 4, 6);
+        book(user("carol@kitdesk.test"), unit("CAM-R5-01"), 4, 6);
+        flushAndClear();
+
+        LocalDate day4 = DAY0.plusDays(4);
+        assertThat(reservations.findBlockedByOverdueUnit(day4, day4))
+                .extracting(Reservation::getPublicId).containsExactly(alices.getPublicId());
+        // Before Bob is late (day 2 is his last day), nothing is blocked yet.
+        assertThat(reservations.findBlockedByOverdueUnit(DAY0.plusDays(2), DAY0.plusDays(6))).isEmpty();
+        // Looking ahead: on day 3 Bob is late, and Alice's day-4 start is inside a one-day horizon.
+        assertThat(reservations.findBlockedByOverdueUnit(DAY0.plusDays(3), DAY0.plusDays(4))).hasSize(1);
+    }
+
+    @Test
+    void replacementCandidatesAreOtherInServiceUnitsOfTheSameModel() {
+        Unit cam3 = unit("CAM-R5-03");
+        assertThat(units.findReplacementCandidates(cam3.getModel(), cam3.getId()))
+                .extracting(Unit::getAssetTag).containsExactly("CAM-R5-01", "CAM-R5-02");
+    }
+
+    @Test
+    void reassignedBookingIsSavedOnTheNewUnit() {
+        Unit cam3 = unit("CAM-R5-03");
+        Unit cam1 = unit("CAM-R5-01");
+        Reservation r = book(user("alice@kitdesk.test"), cam3, 4, 6);
+        r.reassignTo(cam1, reservations.findActiveByUnit(cam1));
+        reservations.saveAndFlush(r);
+        flushAndClear();
+
+        Reservation loaded = reservations.findByPublicId(r.getPublicId()).orElseThrow();
+        assertThat(loaded.getUnit().getAssetTag()).isEqualTo("CAM-R5-01");
+        assertThat(loaded.getVersion()).isEqualTo(1);
+    }
+
+    @Test
     void findAtVersionReturnsTheReservationWhenTheVersionMatches() {
         Reservation r = book(user("alice@kitdesk.test"), unit("CAM-R5-01"), 0, 2);
         assertThat(reservations.findByPublicIdAtVersion(r.getPublicId(), 0)).isPresent();
