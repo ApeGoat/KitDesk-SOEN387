@@ -1,0 +1,50 @@
+# All environment-specific settings come from environment variables (see .env.example).
+# The defaults below only suit a local docker compose run; never put real secrets here.
+spring:
+  application:
+    name: kitdesk
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/kitdesk}
+    username: ${DB_USER:kitdesk}
+    password: ${DB_PASSWORD:kitdesk}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate   # Flyway owns the schema; Hibernate only checks it matches
+  flyway:
+    enabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true   # request bodies are closed: unknown fields are a 400
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # HealthController serves these groups at the contract's paths, /health/live and /health/ready.
+      # Readiness also checks the database, so it reports DOWN (503) if Postgres is unreachable.
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  pattern:
+    # Every log line carries the request's correlation ID.
+    level: "%5p [%X{correlationId:-}]"
+
+springdoc:
+  swagger-ui:
+    # Show the hand-written contract (src/main/resources/static/openapi.yaml), not a generated one.
+    path: /swagger-ui.html
+    url: /openapi.yaml

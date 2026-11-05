@@ -1,0 +1,1217 @@
+openapi: 3.1.0
+info:
+  title: Kit Desk API
+  version: 1.0.0
+  description: |
+    Booking API for a campus camera and sound equipment desk. All operations
+    require a bearer token except login and the health checks.
+
+    ## Dates and booking rules
+    - Dates are whole calendar days in `YYYY-MM-DD` form. `startDate` and
+      `endDate` are both inclusive.
+    - A reservation covers at most 10 days. `endDate` must be on or after
+      `startDate` and no later than `startDate` + 9 days. For example, the
+      longest reservation starting on 2026-11-02 ends on 2026-11-11.
+    - An **active rental** is a reservation in `RESERVED` or `PICKED_UP`
+      status. A category's `rentalLimit` caps how many active rentals a
+      student may hold in that category at once, whatever their dates.
+    - A reservation is **overdue** when it is `PICKED_UP` and today is after
+      its `endDate`. Overdue is not a separate status. It is reported by the
+      read-only `overdue` field and can be filtered with `overdue=true`. A
+      student with any overdue reservation cannot book or pick up gear.
+    - A `RESERVED` reservation that has not been picked up on its `startDate`
+      remains valid until it is picked up or the `endDate` passes.
+
+    ## Identifiers
+    Every identifier is an opaque, prefixed string (`cat_`, `mdl_`, `unt_`,
+    `res_`, `ntf_`). Clients must not parse identifiers or infer ordering or
+    record counts from them. The label printed on a physical unit is returned
+    separately as `assetTag`.
+
+    ## Strictness policy
+    - Request bodies are closed (`additionalProperties: false`). An unknown
+      field is rejected with 400 `INVALID_REQUEST`, not silently ignored.
+    - Response bodies are open. New fields may be added to any response
+      object in a minor version, and clients must ignore fields they do not
+      recognize.
+    - Every list is returned inside an object (for example
+      `{"reservations": [...]}`) so that pagination metadata can be added
+      later without changing the top-level type.
+
+    ## Errors
+    Every error response uses the `Error` schema. Clients branch on `code`,
+    never on `message`. All codes, with the status each comes with, the
+    operations that return it and whether it is retryable, are listed in
+    `components.x-error-catalog`. Each operation's responses also name the
+    codes that operation can return.
+    - 4xx means the request must be fixed. Do not resend it unchanged.
+    - 5xx means the server failed. Retry with the **same** `Idempotency-Key`.
+    - A client that receives a `code` it does not recognize must treat it as
+      not retryable and show the code and `correlationId` to the user. This
+      is what allows new codes to be added in a minor version.
+
+    ## Idempotency
+    Every operation that changes reservation state (create, cancel, pickup,
+    return) requires an `Idempotency-Key` header.
+    - **Scope.** Keys are scoped to the authenticated user.
+    - **Same request.** Two requests are the same when they have the same
+      method, path, `If-Match-Version` value (if any) and request body,
+      compared as parsed JSON (field order and whitespace are ignored).
+    - **Replay.** Repeating the same request with the same key returns the
+      saved result, status code and body included. Saved errors replay too:
+      a request that first got 409 gets the same 409 again.
+    - **What is saved.** Every 2xx and 4xx result produced after the key is
+      accepted. 5xx results are not saved, so a retry after a 5xx runs the
+      operation again.
+    - **Reuse.** The same key with a different request returns 422
+      `IDEMPOTENCY_KEY_REUSED`.
+    - **Missing key.** Omitting the header returns 422
+      `IDEMPOTENCY_KEY_REQUIRED`.
+    - **Retention.** A key and its saved result are kept for at least 24
+      hours after first use. After that the key may be forgotten, and a
+      request using it is treated as new.
+    - **Timeouts.** A client whose request timed out, or whose connection
+      dropped before a reply arrived, MUST retry with the same key and the
+      same request. Generating a new key could apply the change twice.
+    - **Order of checks.** The server authenticates the caller, checks the
+      caller's role, checks that a key is present, and then looks the key up
+      before anything else. A saved result is replayed before the body,
+      `If-Match-Version`, eligibility rules or reservation state are
+      examined. A retried cancel whose first attempt succeeded therefore gets
+      its saved 200, not 409 `RESERVATION_VERSION_MISMATCH`.
+
+    ## Reservation versions
+    Every reservation has a `version` that increases whenever its state
+    changes. Cancel, pickup and return require an `If-Match-Version` header
+    carrying the version the client last read. This plays the role of the
+    standard `ETag` / `If-Match` pair, using the version number the client
+    already holds.
+    - A missing header returns 428 `VERSION_REQUIRED`.
+    - A version that no longer matches returns 409
+      `RESERVATION_VERSION_MISMATCH`. The client should re-read the
+      reservation with `GET /reservations/{reservationId}` and, if the
+      change is still wanted, send a new request with a new key.
+
+    ## Evolution
+    - Minor versions (1.x) make only additive changes: new operations, new
+      optional request parameters, new response fields and new error codes.
+      Planned additions include availability date filters on
+      `GET /models/{modelId}/units` and pagination on the staff lists.
+    - A breaking change is published under a new path prefix (`/v2`). The
+      old version keeps working for an announced period, and its responses
+      carry `Deprecation` and `Sunset` headers until it is removed.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Authentication
+  - name: Catalogue
+  - name: Reservations
+  - name: Notifications
+  - name: Health
+
+paths:
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Log in
+      description: |
+        Authenticate with an email address and password and receive a bearer
+        token. Not safe, since it issues a new token, but repeating it is
+        harmless: each call returns an independent token, so no
+        Idempotency-Key is needed.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+          description: "`INVALID_CREDENTIALS`: the email or password is incorrect. Not retryable."
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /categories:
+    get:
+      tags: [Catalogue]
+      summary: List equipment categories
+      description: |
+        Returns the equipment categories and the maximum number of active
+        rentals a student may hold in each category. Safe: calling this
+        changes nothing.
+      operationId: listCategories
+      responses:
+        "200":
+          description: Categories returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /models:
+    get:
+      tags: [Catalogue]
+      summary: List equipment models
+      description: |
+        Returns catalogue models, optionally filtered by category. Safe:
+        calling this changes nothing.
+      operationId: listModels
+      parameters:
+        - name: category
+          in: query
+          required: false
+          description: Filter by equipment category.
+          schema:
+            $ref: "#/components/schemas/CategoryCode"
+      responses:
+        "200":
+          description: Models returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: "`INVALID_REQUEST`: `category` is not a known category code."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /models/{modelId}/units:
+    get:
+      tags: [Catalogue]
+      summary: List physical units for a model
+      description: |
+        Returns the physical units belonging to a model and, for each unit,
+        the date ranges it is occupied. Only `RESERVED` and `PICKED_UP`
+        reservations occupy a unit, so only those are listed. Availability
+        date filters are intentionally not included in version 1.0.0; they
+        are planned as an optional, additive parameter in a later minor
+        version. Safe: calling this changes nothing.
+      operationId: listModelUnits
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          description: Opaque model identifier.
+          schema:
+            type: string
+          example: mdl_7c2e
+      responses:
+        "200":
+          description: Units returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no model has this id."
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /reservations:
+    get:
+      tags: [Reservations]
+      summary: List reservations
+      description: |
+        Students receive only their own reservations. Staff receive every
+        reservation. Both may filter by `status` and `overdue`; staff looking
+        for overdue rentals use `overdue=true`. Safe: calling this changes
+        nothing.
+      operationId: listReservations
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Return only reservations in this status.
+          schema:
+            $ref: "#/components/schemas/ReservationStatus"
+        - name: overdue
+          in: query
+          required: false
+          description: |
+            `true` returns only overdue reservations (`PICKED_UP` and past
+            `endDate`). `false` returns only reservations that are not
+            overdue. Omit to return both.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Reservations returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: "`INVALID_REQUEST`: `status` or `overdue` has an invalid value."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+    post:
+      tags: [Reservations]
+      summary: Book a specific unit for a date range
+      description: |
+        Creates a reservation for the authenticated student. Only students
+        may book. The student is taken from the login token and must not be
+        supplied by the client.
+
+        The unit must be free on every day of the inclusive date range. The
+        student's subscription must be active, the student must have no
+        overdue gear, and the booking must not take the student past the
+        category's `rentalLimit` of active rentals.
+
+        NOT safe and not naturally idempotent: sending it twice would book
+        twice, which is why the `Idempotency-Key` header is required. See
+        "Idempotency" in the API description for replay, retention and the
+        order of checks.
+      operationId: createReservation
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewReservation"
+      responses:
+        "201":
+          description: Reservation created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: |
+            `INVALID_REQUEST`: a missing or invalid date, `endDate` before
+            `startDate`, a range longer than 10 days, a `startDate` before
+            today, an unknown body field, or an `Idempotency-Key` that is not
+            a UUID. Not retryable.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: |
+            `FORBIDDEN`: the caller is staff, not a student.
+            `SUBSCRIPTION_INACTIVE`: the student's subscription is not active.
+            `OVERDUE_GEAR`: the student has at least one overdue reservation.
+            None are retryable.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no unit has this `unitId`. Not retryable."
+        "409":
+          $ref: "#/components/responses/Conflict"
+          description: |
+            `UNIT_UNAVAILABLE`: the unit is already occupied on at least one
+            requested day. `CATEGORY_LIMIT_REACHED`: the student already holds
+            the maximum number of active rentals in this category. Neither is
+            retryable.
+        "422":
+          $ref: "#/components/responses/IdempotencyError"
+          description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /reservations/{reservationId}:
+    get:
+      tags: [Reservations]
+      summary: Get a reservation
+      description: |
+        Students may retrieve only their own reservations; a reservation
+        belonging to another student is returned as not found. Staff may
+        retrieve any reservation. This is the recovery path after a lost
+        reply or a 409 `RESERVATION_VERSION_MISMATCH`: read the current
+        status and version, then decide what to do. Safe: calling this
+        changes nothing.
+      operationId: getReservation
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Reservation returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no reservation has this id, or it belongs to another student."
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /reservations/{reservationId}/cancel:
+    post:
+      tags: [Reservations]
+      summary: Cancel a reservation
+      description: |
+        Cancels a `RESERVED` reservation owned by the calling student, before
+        pickup. A reservation that has been picked up, returned, cancelled or
+        expired cannot be cancelled.
+
+        NOT safe and not naturally idempotent: a second cancel would fail on
+        state or version. The `Idempotency-Key` makes retries safe, and the
+        key is checked before the version, so a retried cancel whose first
+        attempt succeeded gets its saved 200.
+      operationId: cancelReservation
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatchVersion"
+      responses:
+        "200":
+          description: Reservation cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no reservation has this id, or it belongs to another student."
+        "409":
+          $ref: "#/components/responses/Conflict"
+          description: |
+            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`.
+            `RESERVATION_VERSION_MISMATCH`: the stored version differs from
+            `If-Match-Version`; re-read the reservation. Neither is retryable.
+        "422":
+          $ref: "#/components/responses/IdempotencyError"
+          description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /reservations/{reservationId}/pickup:
+    post:
+      tags: [Reservations]
+      summary: Record a reservation pickup
+      description: |
+        Staff-only. Records that the reserved unit has been handed to the
+        student. The reservation must be `RESERVED`, its version must match
+        `If-Match-Version`, and the student must have no overdue gear.
+
+        NOT safe and not naturally idempotent: a repeated pickup would fail
+        on state or version. The `Idempotency-Key` lets the desk app retry
+        after a lost reply and receive the saved result instead of a 409.
+      operationId: pickupReservation
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatchVersion"
+      responses:
+        "200":
+          description: Pickup recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: |
+            `FORBIDDEN`: the caller is not staff. `OVERDUE_GEAR`: the student
+            has another reservation that is overdue. Neither is retryable.
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no reservation has this id."
+        "409":
+          $ref: "#/components/responses/Conflict"
+          description: |
+            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`.
+            `RESERVATION_VERSION_MISMATCH`: the stored version differs from
+            `If-Match-Version`; re-read the reservation. Neither is retryable.
+        "422":
+          $ref: "#/components/responses/IdempotencyError"
+          description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /reservations/{reservationId}/return:
+    post:
+      tags: [Reservations]
+      summary: Record a reservation return
+      description: |
+        Staff-only. Records that the unit has been returned to the desk. The
+        reservation must be `PICKED_UP` (overdue or not) and its version must
+        match `If-Match-Version`.
+
+        NOT safe and not naturally idempotent: a repeated return would fail
+        on state or version. The `Idempotency-Key` lets the desk app retry
+        after a lost reply and receive the saved result instead of a 409.
+      operationId: returnReservation
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatchVersion"
+      responses:
+        "200":
+          description: Return recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: "`FORBIDDEN`: the caller is not staff. Not retryable."
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no reservation has this id."
+        "409":
+          $ref: "#/components/responses/Conflict"
+          description: |
+            `INVALID_RESERVATION_STATE`: the reservation is not `PICKED_UP`.
+            `RESERVATION_VERSION_MISMATCH`: the stored version differs from
+            `If-Match-Version`; re-read the reservation. Neither is retryable.
+        "422":
+          $ref: "#/components/responses/IdempotencyError"
+          description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List email notifications
+      description: |
+        Staff-only. Returns email notifications in the given status, which
+        defaults to `FAILED` (notifications that ultimately failed to send
+        and are waiting for staff review). Safe: calling this changes
+        nothing.
+      operationId: listNotifications
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Notification status filter. Defaults to `FAILED`.
+          schema:
+            $ref: "#/components/schemas/NotificationStatus"
+            default: FAILED
+      responses:
+        "200":
+          description: Notifications returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+          description: "`INVALID_REQUEST`: `status` is not a known notification status."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: "`FORBIDDEN`: the caller is not staff. Not retryable."
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /notifications/{notificationId}/retry:
+    post:
+      tags: [Notifications]
+      summary: Retry a failed email notification
+      description: |
+        Staff-only. Requests another send attempt for a notification in
+        `FAILED` status. The notification moves to `PENDING` and the call
+        returns 202 before the email is sent.
+
+        Not safe. Repeats are detected by status rather than by an
+        idempotency key: a second call while the notification is `PENDING`,
+        or after it is `SENT`, returns 409 `NOTIFICATION_NOT_RETRYABLE`, so a
+        repeated call never sends the email twice. After a lost reply, check
+        the notification's status with `GET /notifications?status=PENDING`.
+      operationId: retryNotification
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          description: Opaque notification identifier.
+          schema:
+            type: string
+          example: ntf_4d1b
+      responses:
+        "202":
+          description: Retry accepted for processing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: "`FORBIDDEN`: the caller is not staff. Not retryable."
+        "404":
+          $ref: "#/components/responses/NotFound"
+          description: "`NOT_FOUND`: no notification has this id."
+        "409":
+          $ref: "#/components/responses/Conflict"
+          description: "`NOTIFICATION_NOT_RETRYABLE`: the notification is `PENDING` or `SENT`, not `FAILED`. Not retryable."
+        "5XX":
+          $ref: "#/components/responses/ServerError"
+
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: Indicates whether the application process is running. Safe; requires no token.
+      operationId: liveness
+      security: []
+      responses:
+        "200":
+          description: Application is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      description: |
+        Indicates whether the application is ready to accept requests,
+        including database connectivity. Safe; requires no token.
+      operationId: readiness
+      security: []
+      responses:
+        "200":
+          description: Application is ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: Application is not ready to accept requests.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated UUID identifying one logical action, scoped to the
+        authenticated user. The same request with the same key returns the
+        saved result (errors included); the same key with a different request
+        returns 422 `IDEMPOTENCY_KEY_REUSED`; a missing key returns 422
+        `IDEMPOTENCY_KEY_REQUIRED`. Keys are kept for at least 24 hours. After
+        a timeout, retry with the same key. Full rules are under
+        "Idempotency" in the API description.
+      schema:
+        type: string
+        format: uuid
+      example: 5b0e2c1a-8f7d-4c61-9a0e-3d2f6c7b9e14
+
+    ReservationId:
+      name: reservationId
+      in: path
+      required: true
+      description: Opaque reservation identifier.
+      schema:
+        type: string
+      example: res_8f3a
+
+    IfMatchVersion:
+      name: If-Match-Version
+      in: header
+      required: true
+      description: |
+        Version of the reservation most recently read by the client. A
+        missing header returns 428 `VERSION_REQUIRED`. A version that differs
+        from the stored one returns 409 `RESERVATION_VERSION_MISMATCH`.
+      schema:
+        type: integer
+        minimum: 0
+      example: 3
+
+  schemas:
+    CategoryCode:
+      type: string
+      enum: [CAMERA, LENS, LIGHTING, SOUND]
+
+    UserRole:
+      type: string
+      enum: [STUDENT, STAFF]
+
+    ReservationStatus:
+      type: string
+      enum: [RESERVED, PICKED_UP, RETURNED, CANCELLED, EXPIRED]
+      description: |
+        `RESERVED` and `PICKED_UP` are active. A `RESERVED` reservation not
+        picked up by the end of its `endDate` becomes `EXPIRED`. Overdue is
+        not a status; see `Reservation.overdue`.
+
+    NotificationStatus:
+      type: string
+      enum: [PENDING, SENT, FAILED]
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          examples: [student@university.ca]
+        password:
+          type: string
+          format: password
+          writeOnly: true
+
+    LoginResponse:
+      type: object
+      required: [token, tokenType, expiresIn, role]
+      properties:
+        token:
+          type: string
+          description: Signed JWT access token.
+        tokenType:
+          type: string
+          examples: [Bearer]
+        expiresIn:
+          type: integer
+          description: Token lifetime in seconds.
+          examples: [1800]
+        role:
+          $ref: "#/components/schemas/UserRole"
+
+    Category:
+      type: object
+      required: [id, code, name, rentalLimit]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Opaque category identifier.
+          examples: [cat_3k9q]
+        code:
+          $ref: "#/components/schemas/CategoryCode"
+        name:
+          type: string
+          examples: [Cameras]
+        rentalLimit:
+          type: integer
+          minimum: 1
+          description: |
+            Maximum number of active rentals (`RESERVED` or `PICKED_UP`) a
+            student may hold in this category at once.
+          examples: [1]
+
+    CategoryList:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+
+    Model:
+      type: object
+      required: [id, name, category, unitCount]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Opaque model identifier.
+          examples: [mdl_7c2e]
+        name:
+          type: string
+          examples: [Canon EOS R5]
+        category:
+          $ref: "#/components/schemas/CategoryCode"
+        unitCount:
+          type: integer
+          minimum: 0
+          description: Total number of physical units belonging to this model.
+
+    ModelList:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+
+    Unit:
+      type: object
+      required: [id, assetTag, modelId, reservations]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Opaque unit identifier. Use this as `unitId` when booking.
+          examples: [unt_2m8x]
+        assetTag:
+          type: string
+          readOnly: true
+          description: Label printed on the physical unit, for display only. Not an identifier.
+          examples: [CAM-R5-03]
+        modelId:
+          type: string
+          readOnly: true
+          examples: [mdl_7c2e]
+        reservations:
+          type: array
+          description: |
+            Reservations that occupy dates on this unit's calendar. Only
+            `RESERVED` and `PICKED_UP` reservations are included.
+          items:
+            $ref: "#/components/schemas/UnitBooking"
+
+    UnitList:
+      type: object
+      required: [units]
+      properties:
+        units:
+          type: array
+          items:
+            $ref: "#/components/schemas/Unit"
+
+    UnitBooking:
+      type: object
+      required: [startDate, endDate, status]
+      properties:
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [RESERVED, PICKED_UP]
+
+    NewReservation:
+      type: object
+      additionalProperties: false
+      required: [unitId, startDate, endDate]
+      properties:
+        unitId:
+          type: string
+          description: Opaque unit identifier (`Unit.id`).
+          examples: [unt_2m8x]
+        startDate:
+          type: string
+          format: date
+          description: First day of the reservation, inclusive. Must not be before today.
+          examples: ["2026-11-02"]
+        endDate:
+          type: string
+          format: date
+          description: |
+            Last day of the reservation, inclusive. Must be on or after
+            `startDate` and no later than `startDate` + 9 days, so the
+            reservation covers at most 10 days.
+          examples: ["2026-11-09"]
+
+    Reservation:
+      type: object
+      required:
+        [
+          id,
+          unitId,
+          modelId,
+          modelName,
+          category,
+          startDate,
+          endDate,
+          status,
+          overdue,
+          version,
+        ]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Opaque reservation identifier.
+          examples: [res_8f3a]
+        unitId:
+          type: string
+          examples: [unt_2m8x]
+        modelId:
+          type: string
+          readOnly: true
+          examples: [mdl_7c2e]
+        modelName:
+          type: string
+          readOnly: true
+          examples: [Canon EOS R5]
+        category:
+          $ref: "#/components/schemas/CategoryCode"
+          readOnly: true
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        status:
+          $ref: "#/components/schemas/ReservationStatus"
+        overdue:
+          type: boolean
+          readOnly: true
+          description: True when the reservation is `PICKED_UP` and today is after `endDate`.
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+          readOnly: true
+          description: Incremented whenever the reservation state changes. Send it as `If-Match-Version`.
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+
+    ReservationList:
+      type: object
+      required: [reservations]
+      properties:
+        reservations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Reservation"
+
+    Notification:
+      type: object
+      required:
+        [id, reservationId, type, recipient, status, attemptCount, createdAt]
+      properties:
+        id:
+          type: string
+          readOnly: true
+          description: Opaque notification identifier.
+          examples: [ntf_4d1b]
+        reservationId:
+          type: string
+          readOnly: true
+          examples: [res_8f3a]
+        type:
+          type: string
+          enum:
+            [
+              CONFIRMATION,
+              CANCELLATION,
+              PICKUP_REMINDER,
+              RETURN_REMINDER,
+              OVERDUE_REMINDER,
+            ]
+        recipient:
+          type: string
+          format: email
+        status:
+          $ref: "#/components/schemas/NotificationStatus"
+        attemptCount:
+          type: integer
+          minimum: 0
+        lastError:
+          type: [string, "null"]
+          description: Last provider error, if sending failed.
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        lastAttemptAt:
+          type: [string, "null"]
+          format: date-time
+          readOnly: true
+
+    NotificationList:
+      type: object
+      required: [notifications]
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+
+    Error:
+      type: object
+      required: [code, message, correlationId]
+      description: |
+        Standard error response. `code` is machine-readable and listed in
+        `components.x-error-catalog`; `message` is for humans and may change.
+        Clients must treat an unrecognized `code` as not retryable and show
+        it, with the `correlationId`, to the user.
+      properties:
+        code:
+          type: string
+          examples: [UNIT_UNAVAILABLE]
+        message:
+          type: string
+          examples: [CAM-R5-03 is already booked from 2026-11-05 to 2026-11-07.]
+        correlationId:
+          type: string
+          format: uuid
+          description: Identifier used to find the request in application logs.
+          examples: [c1f9a3d2-77e0-4b1c-9f45-0a6d2e8b1c33]
+
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN]
+        database:
+          type: string
+          enum: [UP, DOWN]
+          description: Included by the readiness endpoint when database status is checked.
+
+  responses:
+    BadRequest:
+      description: |
+        `INVALID_REQUEST`: the request is malformed or contains invalid
+        values. Fix the request; do not resend it unchanged.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Unauthorized:
+      description: |
+        `UNAUTHORIZED`: missing, expired or invalid bearer token. Log in
+        again; the same request may then be resent with the same key.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Forbidden:
+      description: |
+        The caller may not perform this operation (`FORBIDDEN`), or the
+        student fails an eligibility rule (`SUBSCRIPTION_INACTIVE`,
+        `OVERDUE_GEAR`). Each operation lists the codes it can return.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: "`NOT_FOUND`: the resource does not exist or is not visible to the authenticated student."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Conflict:
+      description: |
+        The operation conflicts with current availability, category limits,
+        reservation state, reservation version or notification state. Each
+        operation lists the codes it can return.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    IdempotencyError:
+      description: |
+        `IDEMPOTENCY_KEY_REQUIRED`: the `Idempotency-Key` header is missing.
+        `IDEMPOTENCY_KEY_REUSED`: this user already used the key with a
+        different request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    PreconditionRequired:
+      description: "`VERSION_REQUIRED`: the `If-Match-Version` header is missing. Read the reservation and resend with its version."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ServerError:
+      description: |
+        `INTERNAL_ERROR` (500) or `SERVICE_UNAVAILABLE` (503): the server
+        failed to complete the request. Retryable: retry after a short delay
+        with the same `Idempotency-Key` and the same request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  x-error-catalog:
+    - code: INVALID_REQUEST
+      status: 400
+      when: The request is malformed or breaks a validation rule (invalid date, endDate before startDate, range over 10 days, startDate in the past, unknown body field, invalid query value, Idempotency-Key not a UUID).
+      operations:
+        [
+          login,
+          listModels,
+          listReservations,
+          createReservation,
+          cancelReservation,
+          pickupReservation,
+          returnReservation,
+          listNotifications,
+        ]
+      retryable: false
+    - code: INVALID_CREDENTIALS
+      status: 401
+      when: The email or password is incorrect.
+      operations: [login]
+      retryable: false
+    - code: UNAUTHORIZED
+      status: 401
+      when: The bearer token is missing, expired or invalid.
+      operations: [all except login and health checks]
+      retryable: false
+      note: After logging in again, the same request may be resent with the same key.
+    - code: FORBIDDEN
+      status: 403
+      when: The caller's role does not allow the operation (a student calling a staff-only operation, or staff creating a reservation).
+      operations:
+        [
+          createReservation,
+          pickupReservation,
+          returnReservation,
+          listNotifications,
+          retryNotification,
+        ]
+      retryable: false
+    - code: SUBSCRIPTION_INACTIVE
+      status: 403
+      when: The student's subscription is not active.
+      operations: [createReservation]
+      retryable: false
+    - code: OVERDUE_GEAR
+      status: 403
+      when: The student has at least one overdue reservation.
+      operations: [createReservation, pickupReservation]
+      retryable: false
+    - code: NOT_FOUND
+      status: 404
+      when: The model, unit, reservation or notification does not exist, or the reservation belongs to another student.
+      operations:
+        [
+          listModelUnits,
+          createReservation,
+          getReservation,
+          cancelReservation,
+          pickupReservation,
+          returnReservation,
+          retryNotification,
+        ]
+      retryable: false
+    - code: UNIT_UNAVAILABLE
+      status: 409
+      when: The unit is already occupied on at least one requested day.
+      operations: [createReservation]
+      retryable: false
+    - code: CATEGORY_LIMIT_REACHED
+      status: 409
+      when: The student already holds the category's rentalLimit of active rentals.
+      operations: [createReservation]
+      retryable: false
+    - code: INVALID_RESERVATION_STATE
+      status: 409
+      when: The reservation is not in the status the operation requires (RESERVED for cancel and pickup, PICKED_UP for return).
+      operations: [cancelReservation, pickupReservation, returnReservation]
+      retryable: false
+    - code: RESERVATION_VERSION_MISMATCH
+      status: 409
+      when: The stored reservation version differs from If-Match-Version.
+      operations: [cancelReservation, pickupReservation, returnReservation]
+      retryable: false
+      note: Re-read with getReservation; if the change is still wanted, send a new request with a new key.
+    - code: NOTIFICATION_NOT_RETRYABLE
+      status: 409
+      when: The notification is PENDING or SENT, not FAILED.
+      operations: [retryNotification]
+      retryable: false
+    - code: IDEMPOTENCY_KEY_REQUIRED
+      status: 422
+      when: The Idempotency-Key header is missing.
+      operations:
+        [
+          createReservation,
+          cancelReservation,
+          pickupReservation,
+          returnReservation,
+        ]
+      retryable: false
+    - code: IDEMPOTENCY_KEY_REUSED
+      status: 422
+      when: This user already used the key with a different request.
+      operations:
+        [
+          createReservation,
+          cancelReservation,
+          pickupReservation,
+          returnReservation,
+        ]
+      retryable: false
+    - code: VERSION_REQUIRED
+      status: 428
+      when: The If-Match-Version header is missing.
+      operations: [cancelReservation, pickupReservation, returnReservation]
+      retryable: false
+    - code: INTERNAL_ERROR
+      status: 500
+      when: An unexpected server failure.
+      operations: [all except health checks]
+      retryable: true
+      note: Retry with the same Idempotency-Key and the same request.
+    - code: SERVICE_UNAVAILABLE
+      status: 503
+      when: The server or its database is temporarily unavailable.
+      operations: [all except health checks]
+      retryable: true
+      note: Retry after a short delay with the same Idempotency-Key and the same request.
+
+security:
+  - bearerAuth: []
