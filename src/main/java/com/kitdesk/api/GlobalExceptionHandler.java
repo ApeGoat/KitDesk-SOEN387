@@ -1,11 +1,17 @@
 package com.kitdesk.api;
 
+import com.kitdesk.domain.DomainRuleViolation;
+import com.kitdesk.repository.VersionMismatchException;
+import com.kitdesk.service.ErrorCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -13,14 +19,36 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
- * Turns exceptions into the {@link ApiError} shape, using the codes from the contract's
- * error catalogue. Domain errors (UNIT_UNAVAILABLE, CATEGORY_LIMIT_REACHED, ...) get their own
- * handlers as the services are built.
+ * Turns exceptions into the {@link ApiError} shape, using the codes and statuses from the
+ * contract's error catalogue ({@link ErrorCatalog}). Rule violations from the domain and
+ * service layers carry their code; this only picks the HTTP status for it.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(DomainRuleViolation.class)
+    public ResponseEntity<ApiError> ruleViolation(DomainRuleViolation e) {
+        return ResponseEntity.status(ErrorCatalog.statusOf(e.getCode())).body(ApiError.of(e.getCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler({VersionMismatchException.class, ObjectOptimisticLockingFailureException.class})
+    public ResponseEntity<ApiError> versionMismatch(RuntimeException e) {
+        String message = e instanceof VersionMismatchException
+                ? e.getMessage()
+                : "The reservation was changed by someone else. Re-read it and try again.";
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of(ErrorCatalog.RESERVATION_VERSION_MISMATCH, message));
+    }
+
+    /** The database is down or unreachable: 503, retryable with the same key. */
+    @ExceptionHandler({CannotCreateTransactionException.class, DataAccessResourceFailureException.class})
+    public ResponseEntity<ApiError> databaseUnavailable(RuntimeException e) {
+        log.error("Database unavailable", e);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiError.of(ErrorCatalog.SERVICE_UNAVAILABLE, "The service is temporarily unavailable. Try again shortly."));
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> invalidBody(MethodArgumentNotValidException e) {
