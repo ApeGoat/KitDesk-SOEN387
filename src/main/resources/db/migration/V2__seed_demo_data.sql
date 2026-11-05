@@ -1,7 +1,7 @@
 -- Demo data: the four categories with their limits, some models and units, and test accounts.
 -- Every seeded account's password is "password" (bcrypt hash below). Demo use only.
 
-INSERT INTO categories (code, name, max_active_per_student) VALUES
+INSERT INTO categories (code, name, rental_limit) VALUES
     ('CAMERA',   'Cameras',  1),
     ('LENS',     'Lenses',   2),
     ('LIGHTING', 'Lighting', 1),
@@ -16,7 +16,7 @@ INSERT INTO models (category_id, brand, name, description) VALUES
     ((SELECT id FROM categories WHERE code = 'SOUND'),    'Rode',      'NTG3',               'Shotgun microphone'),
     ((SELECT id FROM categories WHERE code = 'SOUND'),    'Zoom',      'H6',                 'Portable audio recorder');
 
-INSERT INTO units (code, model_id) VALUES
+INSERT INTO units (asset_tag, model_id) VALUES
     ('CAM-R5-01',   (SELECT id FROM models WHERE name = 'EOS R5')),
     ('CAM-R5-02',   (SELECT id FROM models WHERE name = 'EOS R5')),
     ('CAM-R5-03',   (SELECT id FROM models WHERE name = 'EOS R5')),

@@ -1,4 +1,7 @@
 -- Kit Desk schema, version 1: catalogue, accounts, reservations, idempotency keys.
+--
+-- Tables keep a numeric id for joins, plus a public_id (e.g. unt_3f9a...) that is the only id the
+-- API ever shows. The contract says ids are opaque, so clients can't guess or count records.
 
 -- Needed so the reservation overlap rule can combine "same unit" (=) with "dates overlap" (&&).
 CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -16,15 +19,17 @@ CREATE TABLE users (
 
 CREATE TABLE categories (
     id                     BIGSERIAL PRIMARY KEY,
+    public_id VARCHAR(40) NOT NULL UNIQUE DEFAULT ('cat_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)),
     code                   VARCHAR(30)  NOT NULL UNIQUE,
     name                   VARCHAR(100) NOT NULL,
     -- How many active reservations one student may hold in this category.
     -- Stored here so staff can change it without a code change.
-    max_active_per_student INTEGER      NOT NULL CHECK (max_active_per_student > 0)
+    rental_limit           INTEGER      NOT NULL CHECK (rental_limit > 0)
 );
 
 CREATE TABLE models (
     id          BIGSERIAL PRIMARY KEY,
+    public_id VARCHAR(40) NOT NULL UNIQUE DEFAULT ('mdl_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)),
     category_id BIGINT       NOT NULL REFERENCES categories (id),
     brand       VARCHAR(100) NOT NULL,
     name        VARCHAR(100) NOT NULL,
@@ -32,10 +37,12 @@ CREATE TABLE models (
     UNIQUE (brand, name)
 );
 
--- A unit is one physical item with its own label, e.g. CAM-R5-03. Students book units.
+-- A unit is one physical item. asset_tag is the label printed on it, e.g. CAM-R5-03.
+-- Students book units.
 CREATE TABLE units (
-    id       BIGSERIAL PRIMARY KEY,
-    code     VARCHAR(30) NOT NULL UNIQUE,
+    id        BIGSERIAL PRIMARY KEY,
+    public_id VARCHAR(40) NOT NULL UNIQUE DEFAULT ('unt_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)),
+    asset_tag VARCHAR(30) NOT NULL UNIQUE,
     model_id BIGINT      NOT NULL REFERENCES models (id),
     active   BOOLEAN     NOT NULL DEFAULT TRUE,
     notes    TEXT
@@ -44,6 +51,7 @@ CREATE INDEX idx_units_model ON units (model_id);
 
 CREATE TABLE reservations (
     id           BIGSERIAL PRIMARY KEY,
+    public_id VARCHAR(40) NOT NULL UNIQUE DEFAULT ('res_' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)),
     student_id   BIGINT      NOT NULL REFERENCES users (id),
     unit_id      BIGINT      NOT NULL REFERENCES units (id),
     start_date   DATE        NOT NULL,
