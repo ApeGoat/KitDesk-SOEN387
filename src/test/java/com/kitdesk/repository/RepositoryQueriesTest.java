@@ -121,13 +121,27 @@ class RepositoryQueriesTest {
     @Test
     void everyStateChangeBumpsTheVersion() {
         Reservation r = book(user("alice@kitdesk.test"), unit("CAM-R5-01"), 0, 2);
-        r.pickUp(DAY0, NOW);
+        r.pickUp(DAY0, NOW, List.of());
         reservations.saveAndFlush(r);
         r.markReturned(NOW);
         reservations.saveAndFlush(r);
         flushAndClear();
 
         assertThat(reservations.findByPublicId(r.getPublicId()).orElseThrow().getVersion()).isEqualTo(2);
+    }
+
+    @Test
+    void earlyPickupSavesTheMovedStartDate() {
+        Unit cam = unit("CAM-R5-01");
+        Reservation r = book(user("alice@kitdesk.test"), cam, 3, 5);
+        r.pickUp(DAY0, NOW, reservations.findActiveByUnit(cam));
+        reservations.saveAndFlush(r);
+        flushAndClear();
+
+        Reservation loaded = reservations.findByPublicId(r.getPublicId()).orElseThrow();
+        assertThat(loaded.getStartDate()).isEqualTo(DAY0);
+        assertThat(loaded.getEndDate()).isEqualTo(DAY0.plusDays(5));
+        assertThat(loaded.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
     }
 
     @Test
@@ -174,7 +188,7 @@ class RepositoryQueriesTest {
         User bob = user("bob@kitdesk.test");
         book(alice, unit("LEN-50-01"), 0, 1);                 // lens, reserved: counts
         Reservation picked = book(alice, unit("LEN-50-02"), 0, 1);
-        picked.pickUp(DAY0, NOW);                              // lens, picked up: counts
+        picked.pickUp(DAY0, NOW, List.of());                              // lens, picked up: counts
         Reservation gone = book(alice, unit("LEN-50-03"), 0, 1);
         gone.cancel(NOW);                                      // lens, cancelled: doesn't
         book(alice, unit("CAM-R5-01"), 0, 1);                 // other category: doesn't
@@ -191,7 +205,7 @@ class RepositoryQueriesTest {
         User alice = user("alice@kitdesk.test");
         User bob = user("bob@kitdesk.test");
         Reservation alicesCamera = book(alice, unit("CAM-R5-01"), 0, 2);
-        alicesCamera.pickUp(DAY0, NOW);
+        alicesCamera.pickUp(DAY0, NOW, List.of());
         book(bob, unit("CAM-R5-02"), 0, 2); // never picked up: not overdue, even later
         flushAndClear();
 
@@ -206,7 +220,7 @@ class RepositoryQueriesTest {
         User alice = user("alice@kitdesk.test");
         Reservation unclaimed = book(alice, unit("CAM-R5-01"), 0, 1);
         Reservation pickedUp = book(alice, unit("CAM-R5-02"), 0, 1);
-        pickedUp.pickUp(DAY0, NOW);
+        pickedUp.pickUp(DAY0, NOW, List.of());
         book(alice, unit("CAM-R5-03"), 0, 5); // still running
         flushAndClear();
 

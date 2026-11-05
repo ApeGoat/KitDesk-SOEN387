@@ -40,7 +40,7 @@ class UnitTest {
     @Test
     void refusedWhenThePickedUpBookingSharesADay() {
         Reservation out = existing(0, 4);
-        out.pickUp(TODAY, NOW);
+        out.pickUp(TODAY, NOW, List.of());
         assertThatThrownBy(() -> unit.assertAvailable(TODAY.plusDays(3), TODAY.plusDays(5), List.of(out)))
                 .isInstanceOf(DomainRuleViolation.class);
     }
@@ -57,7 +57,7 @@ class UnitTest {
         Reservation cancelled = existing(0, 3);
         cancelled.cancel(NOW);
         Reservation returned = existing(0, 3);
-        returned.pickUp(TODAY, NOW);
+        returned.pickUp(TODAY, NOW, List.of());
         returned.markReturned(NOW);
         Reservation expired = existing(0, 3);
         expired.expireIfUnclaimed(TODAY.plusDays(4));

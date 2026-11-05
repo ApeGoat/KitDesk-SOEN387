@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -105,46 +106,41 @@ class ReservationTest {
         @Test
         void cannotCancelAfterPickup() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW);
+            r.pickUp(TODAY, NOW, List.of());
             assertRule(() -> r.cancel(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void pickupOnAnyDayInsideTheRange() {
             Reservation first = book(TODAY, TODAY.plusDays(4));
-            first.pickUp(TODAY, NOW);
+            first.pickUp(TODAY, NOW, List.of());
             assertThat(first.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
 
             Reservation late = book(TODAY, TODAY.plusDays(4));
-            late.pickUp(TODAY.plusDays(4), NOW); // last day still counts
+            late.pickUp(TODAY.plusDays(4), NOW, List.of()); // last day still counts
             assertThat(late.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
             assertThat(late.getEndDate()).isEqualTo(TODAY.plusDays(4)); // late pickup never extends the end date
         }
 
-        @Test
-        void noPickupBeforeTheStartDate() {
-            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            assertRule(() -> r.pickUp(TODAY, NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
-        }
 
         @Test
         void noPickupAfterTheEndDate() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            assertRule(() -> r.pickUp(TODAY.plusDays(3), NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            assertRule(() -> r.pickUp(TODAY.plusDays(3), NOW, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void cannotPickUpTwice() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW);
-            assertRule(() -> r.pickUp(TODAY, NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            r.pickUp(TODAY, NOW, List.of());
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void returnOnlyAfterPickup() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
             assertRule(() -> r.markReturned(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
-            r.pickUp(TODAY, NOW);
+            r.pickUp(TODAY, NOW, List.of());
             r.markReturned(NOW);
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.RETURNED);
             assertRule(() -> r.markReturned(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
@@ -153,10 +149,96 @@ class ReservationTest {
         @Test
         void overdueGearCanStillBeReturned() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW);
+            r.pickUp(TODAY, NOW, List.of());
             assertThat(r.isOverdue(TODAY.plusDays(10))).isTrue();
             r.markReturned(NOW);
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.RETURNED);
+        }
+    }
+
+    @Nested
+    class EarlyPickup {
+
+        // Bob's booking of the same unit, used to block or not block Alice's early pickup.
+        final User bob = new User("bob@kitdesk.test", "hash", "Bob", Role.STUDENT, true);
+
+        Reservation bobs(int fromDay, int toDay) {
+            return Reservation.create(bob, unit, TODAY.plusDays(fromDay), TODAY.plusDays(toDay), TODAY, NOW);
+        }
+
+        @Test
+        void earlyPickupOfAFreeUnitMovesTheStartToToday() {
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            r.pickUp(TODAY, NOW, List.of(r));
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
+            assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(5)); // end never moves
+        }
+
+        @Test
+        void refusedWhileTheUnitIsStillOutWithSomeoneElse() {
+            Reservation bobHasIt = bobs(0, 1);
+            bobHasIt.pickUp(TODAY, NOW, List.of());
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobHasIt, r)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(3)); // nothing changed
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        }
+
+        @Test
+        void refusedWhileAnOverdueHolderStillHasTheUnit() {
+            // Bob's booking ended in the past but he never brought it back: the unit isn't here.
+            Reservation bobsOld = Reservation.create(bob, unit, TODAY.minusDays(5), TODAY.minusDays(3), TODAY.minusDays(5), NOW);
+            bobsOld.pickUp(TODAY.minusDays(5), NOW, List.of());
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobsOld, r)), DomainRuleViolation.UNIT_UNAVAILABLE);
+        }
+
+        @Test
+        void refusedWhenAnotherBookingAwaitsPickupInTheGap() {
+            Reservation bobLater = bobs(1, 2);  // between today and Alice's start
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobLater, r)), DomainRuleViolation.UNIT_UNAVAILABLE);
+        }
+
+        @Test
+        void aBookingReturnedThisMorningDoesNotBlock() {
+            Reservation bobsFinished = bobs(0, 0);
+            bobsFinished.pickUp(TODAY, NOW, List.of());
+            bobsFinished.markReturned(NOW); // returned this morning
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            r.pickUp(TODAY, NOW, List.of(bobsFinished, r));
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
+        }
+
+        @Test
+        void bookingsAfterTheOriginalStartDoNotBlock() {
+            Reservation bobAfter = bobs(6, 8);
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            r.pickUp(TODAY, NOW, List.of(bobAfter, r));
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
+        }
+
+        @Test
+        void cancelledBookingsInTheGapDoNotBlock() {
+            Reservation bobCancelled = bobs(1, 2);
+            bobCancelled.cancel(NOW);
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            r.pickUp(TODAY, NOW, List.of(bobCancelled, r));
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
+        }
+
+        @Test
+        void refusedIfItWouldMakeTheBookingLongerThanTenDays() {
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(12)); // 10 days already
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(r)), DomainRuleViolation.INVALID_RESERVATION_STATE);
+        }
+
+        @Test
+        void earlyPickupUpToTheTenDayLimitIsFine() {
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(9)); // today..day 9 = 10 days
+            r.pickUp(TODAY, NOW, List.of(r));
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
         }
     }
 
@@ -181,7 +263,7 @@ class ReservationTest {
         @Test
         void pickedUpBookingNeverExpires() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW);
+            r.pickUp(TODAY, NOW, List.of());
             assertThat(r.expireIfUnclaimed(TODAY.plusDays(30))).isFalse();
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
         }
@@ -190,7 +272,7 @@ class ReservationTest {
         void overdueOnlyAfterTheEndDateAndOnlyWhenPickedUp() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
             assertThat(r.isOverdue(TODAY.plusDays(5))).isFalse(); // never picked up: not overdue
-            r.pickUp(TODAY, NOW);
+            r.pickUp(TODAY, NOW, List.of());
             assertThat(r.isOverdue(TODAY.plusDays(2))).isFalse(); // last day: still on time
             assertThat(r.isOverdue(TODAY.plusDays(3))).isTrue();
         }

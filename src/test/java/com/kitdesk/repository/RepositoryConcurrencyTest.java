@@ -365,6 +365,79 @@ class RepositoryConcurrencyTest {
     }
 
     // ---------------------------------------------------------------------------------------
+    // 3b. Early pickup racing a new booking for the gap days
+    // ---------------------------------------------------------------------------------------
+
+    /** Alice booked days 3..5. At the same time: staff record her pickup today (moving her start
+     *  to day 0) while Bob books days 1..2 of the same unit. Both can't happen. */
+    String alicesLaterBooking(String cam) {
+        Long alice = userId("alice@kitdesk.test");
+        return tx().execute(s -> reservations.save(Reservation.create(
+                users.findById(alice).orElseThrow(), units.findByPublicId(cam).orElseThrow(),
+                DAY0.plusDays(3), DAY0.plusDays(5), DAY0, NOW)).getPublicId());
+    }
+
+    @Test
+    void withTheUnitLockEarlyPickupAndAGapBookingCannotBothWin() throws Exception {
+        String cam = unitId("CAM-R5-03");
+        String alicesId = alicesLaterBooking(cam);
+        Long bob = userId("bob@kitdesk.test");
+
+        List<Callable<String>> tasks = List.of(
+                () -> tx().execute(s -> {
+                    Unit unit = units.lockUnit(cam).orElseThrow();
+                    Reservation r = reservations.findByPublicIdAtVersion(alicesId, 0).orElseThrow();
+                    r.pickUp(DAY0, NOW, reservations.findActiveByUnit(unit));
+                    reservations.saveAndFlush(r);
+                    return "early pickup";
+                }),
+                () -> tx().execute(s -> {
+                    User student = users.lockStudent(bob).orElseThrow();
+                    Unit unit = units.lockUnit(cam).orElseThrow();
+                    unit.assertAvailable(DAY0.plusDays(1), DAY0.plusDays(2), reservations.findActiveByUnit(unit));
+                    reservations.saveAndFlush(Reservation.create(student, unit, DAY0.plusDays(1), DAY0.plusDays(2), DAY0, NOW));
+                    return "gap booking";
+                }));
+        List<Outcome<String>> outcomes = Concurrently.run(tasks);
+
+        assertThat(count(outcomes, true)).isEqualTo(1);
+        assertThat(outcomes).filteredOn(o -> !o.succeeded()).singleElement()
+                .satisfies(o -> assertThat(o.error()).isInstanceOf(DomainRuleViolation.class));
+    }
+
+    @Test
+    void withoutLocksTheDatabaseRuleStillStopsAnEarlyPickupOverlappingAGapBooking() throws Exception {
+        String cam = unitId("CAM-R5-03");
+        String alicesId = alicesLaterBooking(cam);
+        Long bob = userId("bob@kitdesk.test");
+        CyclicBarrier bothChecked = new CyclicBarrier(2);
+
+        List<Callable<String>> tasks = List.of(
+                () -> tx().execute(s -> {
+                    Unit unit = units.findByPublicId(cam).orElseThrow();              // no lock
+                    Reservation r = reservations.findByPublicIdAtVersion(alicesId, 0).orElseThrow();
+                    List<Reservation> seen = reservations.findActiveByUnit(unit);
+                    await(bothChecked);
+                    r.pickUp(DAY0, NOW, seen);                                         // sees no gap booking
+                    reservations.saveAndFlush(r);
+                    return "early pickup";
+                }),
+                () -> tx().execute(s -> {
+                    User student = users.findById(bob).orElseThrow();
+                    Unit unit = units.findByPublicId(cam).orElseThrow();              // no lock
+                    unit.assertAvailable(DAY0.plusDays(1), DAY0.plusDays(2), reservations.findActiveByUnit(unit));
+                    await(bothChecked);
+                    reservations.saveAndFlush(Reservation.create(student, unit, DAY0.plusDays(1), DAY0.plusDays(2), DAY0, NOW));
+                    return "gap booking";
+                }));
+        List<Outcome<String>> outcomes = Concurrently.run(tasks);
+
+        assertThat(count(outcomes, true)).isEqualTo(1);
+        assertThat(outcomes).filteredOn(o -> !o.succeeded()).singleElement()
+                .satisfies(o -> assertThat(DatabaseConstraints.isReservationOverlap(o.error())).isTrue());
+    }
+
+    // ---------------------------------------------------------------------------------------
     // 4. Optimistic locking on status changes
     // ---------------------------------------------------------------------------------------
 
@@ -390,7 +463,7 @@ class RepositoryConcurrencyTest {
                 () -> tx().execute(s -> {
                     Reservation r = reservations.findByPublicIdAtVersion(resId, 0).orElseThrow();
                     await(bothRead);
-                    r.pickUp(DAY0, NOW);
+                    r.pickUp(DAY0, NOW, List.of());
                     reservations.saveAndFlush(r);
                     return "pickup";
                 }));
@@ -421,7 +494,7 @@ class RepositoryConcurrencyTest {
 
         // The tablet now tries a pickup with its stale version 0.
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx().executeWithoutResult(s ->
-                        reservations.findByPublicIdAtVersion(resId, 0).orElseThrow().pickUp(DAY0, NOW)))
+                        reservations.findByPublicIdAtVersion(resId, 0).orElseThrow().pickUp(DAY0, NOW, List.of())))
                 .isInstanceOf(VersionMismatchException.class);
         assertThat(reservations.findByPublicId(resId).orElseThrow().getStatus()).isEqualTo(ReservationStatus.CANCELLED);
     }
