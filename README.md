@@ -23,16 +23,22 @@ Status as of the scaffolding: the project skeleton, database schema and demo dat
 
 Java 21 · Spring Boot 3.5 · PostgreSQL 16 · Flyway · JPA/Hibernate · springdoc (Swagger UI) · Docker Compose · JUnit 5 + Testcontainers
 
+## The contract
+
+The API contract is [`src/main/resources/static/openapi.yaml`](src/main/resources/static/openapi.yaml) (OpenAPI 3.1). It is the source of truth: the code is built to match it, and Swagger UI displays this file rather than a generated one.
+
 ## Project layout
 
 ```
 src/main/java/com/kitdesk/
   api/          Interface layer: controllers, request/response objects, error handling
+  config/       Cross-cutting setup (correlation IDs; later security)
   service/      All business rules and transactions
   domain/       Entities and enums
   repository/   Database access (Spring Data)
 src/main/resources/
   application.yml          Settings, all overridable by environment variables
+  static/openapi.yaml      The API contract
   db/migration/            Flyway migrations, run in order on startup
 ```
 
@@ -46,8 +52,9 @@ docker compose up --build
 ```
 
 - API: http://localhost:8080
-- Swagger UI: http://localhost:8080/swagger-ui.html
-- Health: http://localhost:8080/actuator/health/liveness and `/readiness`
+- Swagger UI (shows the contract): http://localhost:8080/swagger-ui.html
+- Contract file: http://localhost:8080/openapi.yaml
+- Health: http://localhost:8080/health/live and http://localhost:8080/health/ready
 
 The database is stored in a Docker volume, so data survives restarts. To start from a clean database: `docker compose down -v`.
 
