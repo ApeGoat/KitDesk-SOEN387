@@ -39,10 +39,10 @@ class KitDeskApplicationTests {
     MockMvc mvc;
 
     @Test
-    void unknownUrlGivesNotFoundInTheStandardErrorShape() throws Exception {
+    void requestWithoutATokenGets401InTheStandardErrorShape() throws Exception {
         mvc.perform(get("/no-such-thing"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
                 .andExpect(jsonPath("$.correlationId").isNotEmpty())
                 .andExpect(jsonPath("$.trace").doesNotExist());
     }
