@@ -1,0 +1,35 @@
+# All environment-specific settings come from environment variables (see .env.example).
+# The defaults below only suit a local docker compose run; never put real secrets here.
+spring:
+  application:
+    name: kitdesk
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/kitdesk}
+    username: ${DB_USER:kitdesk}
+    password: ${DB_PASSWORD:kitdesk}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate   # Flyway owns the schema; Hibernate only checks it matches
+  flyway:
+    enabled: true
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true      # /actuator/health/liveness and /actuator/health/readiness
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
