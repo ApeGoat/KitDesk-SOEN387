@@ -229,9 +229,29 @@ class ReservationTest {
         }
 
         @Test
-        void refusedIfItWouldMakeTheBookingLongerThanTenDays() {
+        void endDateMovesBackSoTheBookingStaysAtTenDays() {
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(12)); // 10 days already
-            assertRule(() -> r.pickUp(TODAY, NOW, List.of(r)), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            r.pickUp(TODAY, NOW, List.of(r));
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
+            assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(9));
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
+        }
+
+        @Test
+        void shortBookingKeepsItsEndDate() {
+            Reservation r = book(TODAY.plusDays(2), TODAY.plusDays(4));
+            r.pickUp(TODAY, NOW, List.of(r));
+            assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(4));
+        }
+
+        @Test
+        void refusedEarlyPickupChangesNeitherDate() {
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(12));
+            Reservation gap = book(TODAY.plusDays(1), TODAY.plusDays(2));
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(r, gap)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(3));
+            assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(12));
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
         }
 
         @Test

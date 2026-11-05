@@ -145,6 +145,19 @@ class RepositoryQueriesTest {
     }
 
     @Test
+    void earlyPickupSavesTheTrimmedEndDate() {
+        Unit cam = unit("CAM-R5-01");
+        Reservation r = book(user("alice@kitdesk.test"), cam, 3, 12); // 10 days
+        r.pickUp(DAY0, NOW, reservations.findActiveByUnit(cam));
+        reservations.saveAndFlush(r);
+        flushAndClear();
+
+        Reservation loaded = reservations.findByPublicId(r.getPublicId()).orElseThrow();
+        assertThat(loaded.getStartDate()).isEqualTo(DAY0);
+        assertThat(loaded.getEndDate()).isEqualTo(DAY0.plusDays(9));
+    }
+
+    @Test
     void blockedBookingsAreThoseWhoseUnitIsStillOutPastItsEndDate() {
         // Bob had CAM-R5-03 for days 0..2 and hasn't brought it back. Alice booked it from day 4.
         // On day 4 her booking is blocked; Carol's booking of another camera isn't.
