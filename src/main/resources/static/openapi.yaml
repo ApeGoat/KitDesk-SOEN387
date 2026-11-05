@@ -19,8 +19,8 @@ info:
       its `endDate`. Overdue is not a separate status. It is reported by the
       read-only `overdue` field and can be filtered with `overdue=true`. A
       student with any overdue reservation cannot book or pick up gear.
-    - A `RESERVED` reservation that has not been picked up on its 'startDate'
-      remains valid until it is picked up or the 'endDate' passes.
+    - A `RESERVED` reservation that has not been picked up on its `startDate`
+      remains valid until it is picked up or the `endDate` passes.
 
     ## Identifiers
     Every identifier is an opaque, prefixed string (`cat_`, `mdl_`, `unt_`,
