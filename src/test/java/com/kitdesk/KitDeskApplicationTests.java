@@ -3,6 +3,7 @@ package com.kitdesk;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -42,14 +43,47 @@ class KitDeskApplicationTests {
         mvc.perform(get("/no-such-thing"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.correlationId").isNotEmpty())
                 .andExpect(jsonPath("$.trace").doesNotExist());
+    }
+
+    @Test
+    void errorBodyEchoesTheCallersCorrelationId() throws Exception {
+        String id = "c1f9a3d2-77e0-4b1c-9f45-0a6d2e8b1c33";
+        mvc.perform(get("/no-such-thing").header("X-Correlation-Id", id))
+                .andExpect(header().string("X-Correlation-Id", id))
+                .andExpect(jsonPath("$.correlationId").value(id));
+    }
+
+    @Test
+    void healthChecksAreServedAtTheContractPaths() throws Exception {
+        mvc.perform(get("/health/live"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+        mvc.perform(get("/health/ready"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.database").value("UP"));
+    }
+
+    @Test
+    void contractIsPublished() throws Exception {
+        mvc.perform(get("/openapi.yaml")).andExpect(status().isOk());
+    }
+
+    @Test
+    void publicIdsHaveTheContractPrefixes() {
+        assertThat(jdbc.queryForList("SELECT public_id FROM units", String.class))
+                .allSatisfy(id -> assertThat(id).matches("unt_[0-9a-f]{16}"));
+        assertThat(jdbc.queryForList("SELECT public_id FROM categories", String.class))
+                .allSatisfy(id -> assertThat(id).startsWith("cat_"));
     }
 
     @Test
     void migrationsCreateSchemaAndSeedData() {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM categories", Integer.class)).isEqualTo(4);
         assertThat(jdbc.queryForObject(
-                "SELECT max_active_per_student FROM categories WHERE code = 'LENS'", Integer.class))
+                "SELECT rental_limit FROM categories WHERE code = 'LENS'", Integer.class))
                 .isEqualTo(2);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM users WHERE email LIKE 'student%'", Integer.class))
@@ -58,7 +92,7 @@ class KitDeskApplicationTests {
 
     @Test
     void databaseRefusesOverlappingActiveReservationsForOneUnit() {
-        Long unit = jdbc.queryForObject("SELECT id FROM units WHERE code = 'CAM-R5-03'", Long.class);
+        Long unit = jdbc.queryForObject("SELECT id FROM units WHERE asset_tag = 'CAM-R5-03'", Long.class);
         Long alice = jdbc.queryForObject("SELECT id FROM users WHERE email = 'alice@kitdesk.test'", Long.class);
         Long bob = jdbc.queryForObject("SELECT id FROM users WHERE email = 'bob@kitdesk.test'", Long.class);
         String insert = "INSERT INTO reservations (student_id, unit_id, start_date, end_date)"
