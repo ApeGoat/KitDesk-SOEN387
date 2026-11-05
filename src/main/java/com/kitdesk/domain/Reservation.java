@@ -14,6 +14,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.Objects;
 
 /**
@@ -45,7 +46,8 @@ public class Reservation {
     @JoinColumn(name = "unit_id", nullable = false, updatable = false)
     private Unit unit;
 
-    @Column(name = "start_date", nullable = false, updatable = false)
+    /** Can move earlier, but only through an early pickup (see {@link #pickUp}). */
+    @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
 
     @Column(name = "end_date", nullable = false, updatable = false)
@@ -127,18 +129,54 @@ public class Reservation {
     }
 
     /**
-     * Staff hand the unit over. Only a RESERVED reservation, and only on a day inside its range:
-     * before startDate the unit may still be out with someone else, and after endDate the
-     * booking has lapsed.
+     * Staff hand the unit over. Only a RESERVED reservation, and not after its endDate (by then
+     * the booking has lapsed).
+     *
+     * <p><b>Early pickup</b> (today is before startDate) is allowed only if all of these hold:
+     * <ul>
+     *   <li>the unit is back at the desk: no other reservation of it is PICKED_UP;</li>
+     *   <li>no other active reservation of the unit falls on any day from today up to the day
+     *       before startDate;</li>
+     *   <li>the booking would still cover at most {@value #MAX_DAYS} days.</li>
+     * </ul>
+     * Then startDate moves to today; endDate never changes. {@code unitBookings} is the unit's
+     * active reservations, loaded by the data source layer while the unit row is locked.
      */
-    public void pickUp(LocalDate today, Instant now) {
+    public void pickUp(LocalDate today, Instant now, Collection<Reservation> unitBookings) {
         requireStatus(ReservationStatus.RESERVED, "picked up");
-        if (today.isBefore(startDate) || today.isAfter(endDate)) {
+        if (today.isAfter(endDate)) {
             throw new DomainRuleViolation(DomainRuleViolation.INVALID_RESERVATION_STATE,
-                    "This reservation can only be picked up between " + startDate + " and " + endDate + ".");
+                    "This reservation ended on " + endDate + " and was never picked up.");
+        }
+        if (today.isBefore(startDate)) {
+            moveStartEarlierFor(today, unitBookings);
         }
         status = ReservationStatus.PICKED_UP;
         pickedUpAt = now;
+    }
+
+    private void moveStartEarlierFor(LocalDate today, Collection<Reservation> unitBookings) {
+        if (endDate.isAfter(today.plusDays(MAX_DAYS - 1))) {
+            throw new DomainRuleViolation(DomainRuleViolation.INVALID_RESERVATION_STATE,
+                    "Picking up on " + today + " would make this booking longer than " + MAX_DAYS
+                            + " days; the earliest pickup is " + endDate.minusDays(MAX_DAYS - 1) + ".");
+        }
+        LocalDate dayBeforeStart = startDate.minusDays(1);
+        for (Reservation other : unitBookings) {
+            if (other == this || other.publicId.equals(publicId) || !other.isActive()) {
+                continue;
+            }
+            if (other.status == ReservationStatus.PICKED_UP) {
+                throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
+                        "Early pickup refused: " + unit.getAssetTag() + " has not been returned yet.");
+            }
+            if (other.overlaps(today, dayBeforeStart)) {
+                throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
+                        "Early pickup refused: " + unit.getAssetTag() + " is booked from "
+                                + other.startDate + " to " + other.endDate + ".");
+            }
+        }
+        startDate = today;
     }
 
     /** Staff take the unit back. Only a PICKED_UP reservation (overdue or not). */
