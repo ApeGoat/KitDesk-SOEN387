@@ -42,8 +42,9 @@ public class Reservation {
     @JoinColumn(name = "student_id", nullable = false, updatable = false)
     private User student;
 
+    /** Can change, but only through {@link #reassignTo} (same model, unit free for the whole booking). */
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "unit_id", nullable = false, updatable = false)
+    @JoinColumn(name = "unit_id", nullable = false)
     private Unit unit;
 
     /** Can move earlier, but only through an early pickup (see {@link #pickUp}). */
@@ -177,6 +178,40 @@ public class Reservation {
             }
         }
         startDate = today;
+    }
+
+    /**
+     * Late-return failsafe: moves a booking that hasn't been picked up yet onto another unit of
+     * the same model, when its own unit is still out with someone else. The replacement must be
+     * free for every day of this booking. Dates and everything else stay the same.
+     *
+     * @param replacement         another unit of the same model
+     * @param replacementBookings the replacement's active reservations, loaded while it is locked
+     * @throws DomainRuleViolation INVALID_RESERVATION_STATE if not RESERVED,
+     *                             INVALID_REQUEST if the replacement isn't an identical unit,
+     *                             UNIT_UNAVAILABLE if the replacement is booked or out of service
+     */
+    public void reassignTo(Unit replacement, Collection<Reservation> replacementBookings) {
+        requireStatus(ReservationStatus.RESERVED, "moved to another unit");
+        if (replacement == unit || (replacement.getId() != null && replacement.getId().equals(unit.getId()))) {
+            throw new DomainRuleViolation(DomainRuleViolation.INVALID_REQUEST,
+                    "The replacement must be a different unit.");
+        }
+        if (!sameModel(replacement, unit)) {
+            throw new DomainRuleViolation(DomainRuleViolation.INVALID_REQUEST,
+                    replacement.getAssetTag() + " is not the same model as " + unit.getAssetTag() + ".");
+        }
+        replacement.assertAvailable(startDate, endDate, replacementBookings);
+        unit = replacement;
+    }
+
+    private static boolean sameModel(Unit a, Unit b) {
+        EquipmentModel ma = a.getModel();
+        EquipmentModel mb = b.getModel();
+        if (ma == mb) {
+            return true;
+        }
+        return ma.getId() != null && ma.getId().equals(mb.getId());
     }
 
     /** Staff take the unit back. Only a PICKED_UP reservation (overdue or not). */

@@ -83,4 +83,20 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     List<Reservation> findUnclaimedPastEnd(@Param("today") LocalDate today);
 
     List<Reservation> findByStatus(ReservationStatus status);
+
+    /**
+     * Late-return failsafe: RESERVED bookings whose unit is still PICKED_UP by someone else whose
+     * end date has passed (overdue), and that start on or before {@code horizon}. These are the
+     * bookings that may need moving to another unit.
+     */
+    @Query("""
+            select r from Reservation r
+            where r.status = com.kitdesk.domain.ReservationStatus.RESERVED
+              and r.startDate <= :horizon
+              and exists (select o from Reservation o
+                          where o.unit = r.unit and o.id <> r.id
+                            and o.status = com.kitdesk.domain.ReservationStatus.PICKED_UP
+                            and o.endDate < :today)
+            order by r.startDate""")
+    List<Reservation> findBlockedByOverdueUnit(@Param("today") LocalDate today, @Param("horizon") LocalDate horizon);
 }

@@ -16,6 +16,13 @@ public interface UnitRepository extends JpaRepository<Unit, Long> {
 
     List<Unit> findByModelOrderByAssetTagAsc(EquipmentModel model);
 
+    /** Late-return failsafe: other in-service units of the same model, candidates for a swap. */
+    @Query("""
+            select u from Unit u
+            where u.model = :model and u.id <> :excludeId and u.active = true
+            order by u.assetTag""")
+    List<Unit> findReplacementCandidates(@Param("model") EquipmentModel model, @Param("excludeId") Long excludeId);
+
     /**
      * Loads the unit and locks its row ({@code SELECT ... FOR UPDATE}) until the current
      * transaction ends. Two bookings of the same unit therefore run one after the other: the
