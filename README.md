@@ -1,6 +1,6 @@
 # Kit Desk
 
-**Company:** Kit Desk (working name) · **Founder:** Sam (solo) · SOEN 387, Fall 2026
+**Company:** Kit Desk · **Founder:** Sammy Mohellebi · SOEN 387, Fall 2026
 
 Kit Desk is a back-end booking service for a campus camera and sound gear desk. The student web portal, the staff check-out tablet and partner systems (for example a course site reserving kit for an assignment) all call the same API to reserve **specific units** (e.g. `CAM-R5-03`) for a date range, without ever double-booking one.
 
