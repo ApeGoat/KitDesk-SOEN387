@@ -1,0 +1,27 @@
+# Build output
+target/
+build/
+out/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.DS_Store
+
+# Secrets and local settings (never commit these)
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.properties
+
+# Logs
+*.log
+logs/
