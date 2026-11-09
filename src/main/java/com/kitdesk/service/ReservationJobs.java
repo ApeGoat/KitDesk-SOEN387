@@ -86,7 +86,7 @@ public class ReservationJobs {
         int moved = 0;
         for (Long id : blocked) {
             // One transaction per booking, so one failure doesn't undo the others.
-            Boolean ok = tx.execute(status -> moveToIdenticalUnit(id));
+            Boolean ok = tx.execute(status -> moveToIdenticalUnit(id, today));
             if (Boolean.TRUE.equals(ok)) {
                 moved++;
             }
@@ -98,7 +98,7 @@ public class ReservationJobs {
      * Tries the same model's other in-service units in asset-tag order, locking each before
      * checking its calendar (always the same order, so two runs can't deadlock).
      */
-    private boolean moveToIdenticalUnit(Long reservationId) {
+    private boolean moveToIdenticalUnit(Long reservationId, LocalDate today) {
         Reservation r = reservations.findById(reservationId).orElse(null);
         if (r == null || r.getStatus() != ReservationStatus.RESERVED) {
             return false;   // cancelled or picked up meanwhile
@@ -107,7 +107,7 @@ public class ReservationJobs {
         for (Unit candidate : units.findReplacementCandidates(original.getModel(), original.getId())) {
             Unit locked = locks.lockUnit(candidate.getPublicId()).orElseThrow();
             try {
-                r.reassignTo(locked, reservations.findActiveByUnit(locked));
+                r.reassignTo(locked, today, reservations.findActiveByUnit(locked));
             } catch (DomainRuleViolation busy) {
                 continue;
             }

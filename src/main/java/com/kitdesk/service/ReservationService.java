@@ -99,13 +99,12 @@ public class ReservationService {
         // 2. Lock the unit: bookings of this unit now run one at a time (no double-booking).
         Unit unit = locks.lockUnit(booking.unitId()).orElseThrow(
                 () -> new DomainRuleViolation(ErrorCatalog.NOT_FOUND, "No unit has the id " + booking.unitId() + "."));
+        // Category limit, per day: only rentals this student holds on overlapping days count.
         Category category = unit.getModel().getCategory();
-        if (reservations.countActiveInCategory(student.getId(), category.getId()) >= category.getRentalLimit()) {
-            throw new DomainRuleViolation(ErrorCatalog.CATEGORY_LIMIT_REACHED,
-                    "You already hold " + category.getRentalLimit() + " active " + category.getName().toLowerCase()
-                            + " rental(s), the most allowed at once.");
-        }
-        unit.assertAvailable(booking.startDate(), booking.endDate(), reservations.findActiveByUnit(unit));
+        Reservation.checkCategoryLimit(category, booking.startDate(), booking.endDate(), today,
+                reservations.findActiveInCategoryOverlapping(student.getId(), category.getId(),
+                        booking.startDate(), booking.endDate(), today));
+        unit.assertAvailable(booking.startDate(), booking.endDate(), today, reservations.findActiveByUnit(unit));
 
         Reservation reservation = Reservation.create(student, unit, booking.startDate(), booking.endDate(),
                 today, clock.instant());
@@ -125,9 +124,10 @@ public class ReservationService {
     }
 
     /**
-     * Staff hand the unit over. The student must have no overdue gear. Takes the same locks in the
-     * same order as booking (student, then unit), because an early pickup moves the start date
-     * and must not race a new booking of the days in between.
+     * Staff hand the unit over. The student must have no overdue gear, and the unit must be back.
+     * Takes the same locks in the same order as booking (student, then unit), because an early
+     * pickup moves the start date: it must not race a new booking of the days in between (unit
+     * lock) or another booking by the same student in the same category (student lock).
      */
     @Transactional
     public ReservationView pickUp(Caller caller, String reservationId, Integer expectedVersion) {
@@ -143,7 +143,12 @@ public class ReservationService {
                     "This student has overdue gear, so they can't pick anything up until it's returned.");
         }
         Unit unit = locks.lockUnit(reservation.getUnit().getPublicId()).orElseThrow();
-        reservation.pickUp(today, clock.instant(), reservations.findActiveByUnit(unit));
+        // An early pickup adds the days from today to the old start, so the category limit is
+        // re-checked for [today, endDate] (the domain only uses this list for an early pickup).
+        Category category = unit.getModel().getCategory();
+        List<Reservation> heldInCategory = reservations.findActiveInCategoryOverlapping(
+                student.getId(), category.getId(), today, reservation.getEndDate(), today);
+        reservation.pickUp(today, clock.instant(), reservations.findActiveByUnit(unit), heldInCategory);
         save(reservation);
         return ReservationView.of(reservation, today);
     }
