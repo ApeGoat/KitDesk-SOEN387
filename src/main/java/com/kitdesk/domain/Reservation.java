@@ -22,8 +22,11 @@ import java.util.Objects;
  * A student's booking of one unit for an inclusive date range.
  *
  * <p>This class enforces the rules that only need the reservation's own data (§5.5): the
- * 10-day window and the status transitions. Rules that look across many reservations (category
- * limit, overdue lock-out, subscription) live in the service layer.
+ * 10-day window, the status transitions, early pickup, and how long it keeps its unit busy
+ * ({@link #occupiedUntil}). Rules that look across many reservations (overdue lock-out,
+ * subscription) live in the service layer. The category limit is split: the service loads the
+ * student's overlapping rentals while holding the student's lock, and the per-day count itself
+ * is {@link #checkCategoryLimit} here, so it can be tested without a database.
  */
 @Entity
 @Table(name = "reservations")
