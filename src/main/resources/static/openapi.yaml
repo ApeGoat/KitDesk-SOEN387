@@ -14,7 +14,9 @@ info:
       longest reservation starting on 2026-11-02 ends on 2026-11-11.
     - An **active rental** is a reservation in `RESERVED` or `PICKED_UP`
       status. A category's `rentalLimit` caps how many active rentals a
-      student may hold in that category at once, whatever their dates.
+      student may hold in that category on the same day. Rentals on dates
+      that don't overlap don't count against each other. A `PICKED_UP`
+      rental keeps counting until it is returned, even past its `endDate`.
     - A reservation is **overdue** when it is `PICKED_UP` and today is after
       its `endDate`. Overdue is not a separate status. It is reported by the
       read-only `overdue` field and can be filtered with `overdue=true`. A
@@ -283,7 +285,7 @@ paths:
         The unit must be free on every day of the inclusive date range. The
         student's subscription must be active, the student must have no
         overdue gear, and the booking must not take the student past the
-        category's `rentalLimit` of active rentals.
+        category's `rentalLimit` of active rentals on any day of the range.
 
         NOT safe and not naturally idempotent: sending it twice would book
         twice, which is why the `Idempotency-Key` header is required. See
@@ -328,9 +330,9 @@ paths:
           $ref: "#/components/responses/Conflict"
           description: |
             `UNIT_UNAVAILABLE`: the unit is already occupied on at least one
-            requested day. `CATEGORY_LIMIT_REACHED`: the student already holds
-            the maximum number of active rentals in this category. Neither is
-            retryable.
+            requested day. `CATEGORY_LIMIT_REACHED`: on at least one requested
+            day, the student already holds the maximum number of active rentals
+            in this category. Neither is retryable.
         "422":
           $ref: "#/components/responses/IdempotencyError"
           description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
@@ -746,7 +748,7 @@ components:
           minimum: 1
           description: |
             Maximum number of active rentals (`RESERVED` or `PICKED_UP`) a
-            student may hold in this category at once.
+            student may hold in this category on the same day.
           examples: [1]
 
     CategoryList:
@@ -1154,7 +1156,7 @@ components:
       retryable: false
     - code: CATEGORY_LIMIT_REACHED
       status: 409
-      when: The student already holds the category's rentalLimit of active rentals.
+      when: On at least one requested day, the student already holds the category's rentalLimit of active rentals in that category (rentals whose dates overlap the request; a PICKED_UP rental counts until it is returned).
       operations: [createReservation]
       retryable: false
     - code: INVALID_RESERVATION_STATE
