@@ -12,7 +12,8 @@ Status as of the scaffolding: the project skeleton, database schema and demo dat
 
 - Browse categories, models and individual units
 - Book a specific unit for up to 10 days
-- Per-student limits per category: 1 camera, 2 lenses, 1 light, 2 sound
+- Per-student limits per category on the same days: 1 camera, 2 lenses, 1 light, 2 sound (a camera for week 1 and another for week 3 is fine)
+- Gear that hasn't been returned keeps its unit busy, even past its end date
 - Cancel any time before pickup; an unclaimed booking expires at its end date
 - Overdue gear blocks new bookings and pickups
 - Staff confirm pickups and returns
@@ -85,7 +86,9 @@ Real values go in `.env`, which is git-ignored. Never commit secrets.
 
 ## Demo accounts
 
-Seeded by migration `V2`. Every password is `password`.
+Loaded only with the **`demo` profile**, from `src/main/resources/db/demo/`. Docker Compose and the tests turn that profile on; a real deployment leaves it off, so these accounts never exist there. Every password is `password`.
+
+> **Upgrading an existing local database:** the demo accounts moved out of migration `V2` (Nov 9). A database created before that fails Flyway's check on V2. Reset it once with `docker compose down -v`, then `docker compose up --build`.
 
 | Email | Role | Notes |
 |---|---|---|
