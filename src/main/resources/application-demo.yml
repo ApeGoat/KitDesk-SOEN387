@@ -1,0 +1,6 @@
+# The "demo" profile: everything in application.yml, plus the demo and test accounts
+# (alice@, bob@, carol@, staff@ and student01..50@kitdesk.test, password "password").
+# Turned on by docker-compose.yml and by the tests. Never turn it on in a real deployment.
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/demo

@@ -39,7 +39,8 @@ public class User {
     }
 
     public User(String email, String passwordHash, String fullName, Role role, boolean subscriptionActive) {
-        this.email = email;
+        // Stored lower-case and trimmed, matching the case-insensitive unique index (V3).
+        this.email = email.trim().toLowerCase(java.util.Locale.ROOT);
         this.passwordHash = passwordHash;
         this.fullName = fullName;
         this.role = role;

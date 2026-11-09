@@ -22,6 +22,7 @@ services:
         condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://db:5432/kitdesk
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-demo}   # demo accounts for local runs
       DB_USER: ${DB_USER:-kitdesk}
       DB_PASSWORD: ${DB_PASSWORD:-kitdesk}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (at least 32 characters)}

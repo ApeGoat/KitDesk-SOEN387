@@ -42,7 +42,7 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
+            <!-- compile scope: DatabaseConstraints reads PostgreSQL's error details (SQL state, constraint name) -->
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>

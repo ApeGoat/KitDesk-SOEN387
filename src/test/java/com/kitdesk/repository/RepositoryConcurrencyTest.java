@@ -243,7 +243,7 @@ class RepositoryConcurrencyTest {
         return () -> tx().execute(s -> {
             User student = users.lockStudent(studentId).orElseThrow();
             Unit unit = units.lockUnit(unitPublicId).orElseThrow();
-            unit.assertAvailable(DAY0, DAY0.plusDays(2), reservations.findActiveByUnit(unit));
+            unit.assertAvailable(DAY0, DAY0.plusDays(2), DAY0, reservations.findActiveByUnit(unit));
             return reservations.save(Reservation.create(student, unit, DAY0, DAY0.plusDays(2), DAY0, NOW)).getPublicId();
         });
     }
@@ -279,7 +279,7 @@ class RepositoryConcurrencyTest {
             tasks.add(() -> tx().execute(s -> {
                 User student = users.findById(studentId).orElseThrow();      // no lock
                 Unit unit = units.findByPublicId(cam).orElseThrow();          // no lock
-                unit.assertAvailable(DAY0, DAY0.plusDays(2), reservations.findActiveByUnit(unit));
+                unit.assertAvailable(DAY0, DAY0.plusDays(2), DAY0, reservations.findActiveByUnit(unit));
                 await(allCheckedAvailability);                                 // everyone saw "free"
                 return reservations.saveAndFlush(
                         Reservation.create(student, unit, DAY0, DAY0.plusDays(2), DAY0, NOW)).getPublicId();
@@ -320,18 +320,42 @@ class RepositoryConcurrencyTest {
             tasks.add(() -> tx().execute(s -> {
                 User student = users.lockStudent(alice).orElseThrow();
                 Unit unit = units.lockUnit(lensId).orElseThrow();
-                long held = reservations.countActiveInCategory(alice, lensCategory);
+                List<Reservation> held = reservations.findActiveInCategoryOverlapping(
+                        alice, lensCategory, DAY0, DAY0.plusDays(2), DAY0);
                 sleep(50); // widen the gap between check and insert; the lock must still hold
-                if (held >= unit.getModel().getCategory().getRentalLimit()) {
-                    throw new IllegalStateException("CATEGORY_LIMIT_REACHED");
-                }
+                Reservation.checkCategoryLimit(unit.getModel().getCategory(), DAY0, DAY0.plusDays(2), DAY0, held);
                 return reservations.save(Reservation.create(student, unit, DAY0, DAY0.plusDays(2), DAY0, NOW)).getPublicId();
             }));
         }
         List<Outcome<String>> outcomes = Concurrently.run(tasks);
 
         assertThat(count(outcomes, true)).isEqualTo(2);
-        assertThat(reservations.countActiveInCategory(alice, lensCategory)).isEqualTo(2);
+        assertThat(lensesHeld(alice, lensCategory)).isEqualTo(2);
+    }
+
+    @Test
+    void fiveLensBookingsOnDifferentDaysAllSucceedAtOnce() throws Exception {
+        // The limit is per day: five lenses on five separate days never put 2 on the same day.
+        Long alice = userId("alice@kitdesk.test");
+        Long lensCategory = categories.findByCode(CategoryCode.LENS).orElseThrow().getId();
+
+        List<Callable<String>> tasks = new ArrayList<>();
+        for (int i = 0; i < LENSES.size(); i++) {
+            String lensId = unitId(LENSES.get(i));
+            LocalDate day = DAY0.plusDays(i * 2L);
+            tasks.add(() -> tx().execute(s -> {
+                User student = users.lockStudent(alice).orElseThrow();
+                Unit unit = units.lockUnit(lensId).orElseThrow();
+                List<Reservation> held = reservations.findActiveInCategoryOverlapping(alice, lensCategory, day, day, DAY0);
+                Reservation.checkCategoryLimit(unit.getModel().getCategory(), day, day, DAY0, held);
+                return reservations.save(Reservation.create(student, unit, day, day, DAY0, NOW)).getPublicId();
+            }));
+        }
+        assertThat(count(Concurrently.run(tasks), true)).isEqualTo(5);
+    }
+
+    long lensesHeld(Long studentId, Long lensCategory) {
+        return reservations.findActiveInCategoryOverlapping(studentId, lensCategory, DAY0, DAY0.plusDays(9), DAY0).size();
     }
 
     @Test
@@ -349,17 +373,16 @@ class RepositoryConcurrencyTest {
             tasks.add(() -> tx().execute(s -> {
                 User student = users.findById(alice).orElseThrow();          // no student lock
                 Unit unit = units.lockUnit(lensId).orElseThrow();
-                long held = reservations.countActiveInCategory(alice, lensCategory);
+                List<Reservation> held = reservations.findActiveInCategoryOverlapping(
+                        alice, lensCategory, DAY0, DAY0.plusDays(2), DAY0);
                 await(allCounted);
-                if (held >= unit.getModel().getCategory().getRentalLimit()) {
-                    throw new IllegalStateException("CATEGORY_LIMIT_REACHED");
-                }
+                Reservation.checkCategoryLimit(unit.getModel().getCategory(), DAY0, DAY0.plusDays(2), DAY0, held);
                 return reservations.save(Reservation.create(student, unit, DAY0, DAY0.plusDays(2), DAY0, NOW)).getPublicId();
             }));
         }
         Concurrently.run(tasks);
 
-        assertThat(reservations.countActiveInCategory(alice, lensCategory))
+        assertThat(lensesHeld(alice, lensCategory))
                 .as("limit is 2, but without the student lock all 5 got through")
                 .isEqualTo(5);
     }
@@ -387,14 +410,14 @@ class RepositoryConcurrencyTest {
                 () -> tx().execute(s -> {
                     Unit unit = units.lockUnit(cam).orElseThrow();
                     Reservation r = reservations.findByPublicIdAtVersion(alicesId, 0).orElseThrow();
-                    r.pickUp(DAY0, NOW, reservations.findActiveByUnit(unit));
+                    r.pickUp(DAY0, NOW, reservations.findActiveByUnit(unit), List.of());
                     reservations.saveAndFlush(r);
                     return "early pickup";
                 }),
                 () -> tx().execute(s -> {
                     User student = users.lockStudent(bob).orElseThrow();
                     Unit unit = units.lockUnit(cam).orElseThrow();
-                    unit.assertAvailable(DAY0.plusDays(1), DAY0.plusDays(2), reservations.findActiveByUnit(unit));
+                    unit.assertAvailable(DAY0.plusDays(1), DAY0.plusDays(2), DAY0, reservations.findActiveByUnit(unit));
                     reservations.saveAndFlush(Reservation.create(student, unit, DAY0.plusDays(1), DAY0.plusDays(2), DAY0, NOW));
                     return "gap booking";
                 }));
@@ -418,14 +441,14 @@ class RepositoryConcurrencyTest {
                     Reservation r = reservations.findByPublicIdAtVersion(alicesId, 0).orElseThrow();
                     List<Reservation> seen = reservations.findActiveByUnit(unit);
                     await(bothChecked);
-                    r.pickUp(DAY0, NOW, seen);                                         // sees no gap booking
+                    r.pickUp(DAY0, NOW, seen, List.of());                                         // sees no gap booking
                     reservations.saveAndFlush(r);
                     return "early pickup";
                 }),
                 () -> tx().execute(s -> {
                     User student = users.findById(bob).orElseThrow();
                     Unit unit = units.findByPublicId(cam).orElseThrow();              // no lock
-                    unit.assertAvailable(DAY0.plusDays(1), DAY0.plusDays(2), reservations.findActiveByUnit(unit));
+                    unit.assertAvailable(DAY0.plusDays(1), DAY0.plusDays(2), DAY0, reservations.findActiveByUnit(unit));
                     await(bothChecked);
                     reservations.saveAndFlush(Reservation.create(student, unit, DAY0.plusDays(1), DAY0.plusDays(2), DAY0, NOW));
                     return "gap booking";
@@ -460,7 +483,7 @@ class RepositoryConcurrencyTest {
             tasks.add(() -> tx().execute(s -> {
                 Unit replacement = units.lockUnit(spare).orElseThrow();
                 Reservation r = reservations.findByPublicId(resId).orElseThrow();
-                r.reassignTo(replacement, reservations.findActiveByUnit(replacement));
+                r.reassignTo(replacement, DAY0, reservations.findActiveByUnit(replacement));
                 reservations.saveAndFlush(r);
                 return resId;
             }));
@@ -484,7 +507,7 @@ class RepositoryConcurrencyTest {
                 Reservation r = reservations.findByPublicId(resId).orElseThrow();
                 List<Reservation> seen = reservations.findActiveByUnit(replacement);
                 await(bothChecked);
-                r.reassignTo(replacement, seen);
+                r.reassignTo(replacement, DAY0, seen);
                 reservations.saveAndFlush(r);
                 return resId;
             }));
@@ -523,7 +546,7 @@ class RepositoryConcurrencyTest {
                 () -> tx().execute(s -> {
                     Reservation r = reservations.findByPublicIdAtVersion(resId, 0).orElseThrow();
                     await(bothRead);
-                    r.pickUp(DAY0, NOW, List.of());
+                    r.pickUp(DAY0, NOW, List.of(), List.of());
                     reservations.saveAndFlush(r);
                     return "pickup";
                 }));
@@ -554,7 +577,7 @@ class RepositoryConcurrencyTest {
 
         // The tablet now tries a pickup with its stale version 0.
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx().executeWithoutResult(s ->
-                        reservations.findByPublicIdAtVersion(resId, 0).orElseThrow().pickUp(DAY0, NOW, List.of())))
+                        reservations.findByPublicIdAtVersion(resId, 0).orElseThrow().pickUp(DAY0, NOW, List.of(), List.of())))
                 .isInstanceOf(VersionMismatchException.class);
         assertThat(reservations.findByPublicId(resId).orElseThrow().getStatus()).isEqualTo(ReservationStatus.CANCELLED);
     }

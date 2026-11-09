@@ -12,6 +12,7 @@ public class DomainRuleViolation extends RuntimeException {
     public static final String INVALID_REQUEST = "INVALID_REQUEST";
     public static final String UNIT_UNAVAILABLE = "UNIT_UNAVAILABLE";
     public static final String INVALID_RESERVATION_STATE = "INVALID_RESERVATION_STATE";
+    public static final String CATEGORY_LIMIT_REACHED = "CATEGORY_LIMIT_REACHED";
 
     private final String code;
 

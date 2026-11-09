@@ -49,21 +49,26 @@ public class Unit {
     /**
      * Single-aggregate rule: the unit must be free on every requested day (both ends inclusive).
      * {@code existing} is this unit's reservations, loaded by the data source layer; only active
-     * ones (RESERVED, PICKED_UP) occupy the unit.
+     * ones (RESERVED, PICKED_UP) occupy the unit. A PICKED_UP reservation occupies it until it's
+     * returned, not just until its endDate, so an overdue unit is busy today and onwards
+     * ({@link Reservation#occupiedUntil}).
      *
      * A unit taken out of service ({@code active = false}) is never available.
      *
      * @throws DomainRuleViolation UNIT_UNAVAILABLE naming the first clash
      */
-    public void assertAvailable(LocalDate start, LocalDate end, Collection<Reservation> existing) {
+    public void assertAvailable(LocalDate start, LocalDate end, LocalDate today, Collection<Reservation> existing) {
         if (!active) {
             throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
                     assetTag + " is out of service.");
         }
         for (Reservation r : existing) {
-            if (r.isActive() && r.overlaps(start, end)) {
+            if (r.occupies(start, end, today)) {
+                String until = r.occupiedUntil(today).isAfter(r.getEndDate())
+                        ? " (due back " + r.getEndDate() + ", not returned yet)"
+                        : "";
                 throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
-                        assetTag + " is already booked from " + r.getStartDate() + " to " + r.getEndDate() + ".");
+                        assetTag + " is already booked from " + r.getStartDate() + " to " + r.getEndDate() + until + ".");
             }
         }
     }

@@ -13,6 +13,8 @@ spring:
       ddl-auto: validate   # Flyway owns the schema; Hibernate only checks it matches
   flyway:
     enabled: true
+    # Schema and catalogue only. The demo accounts (db/demo) load only with the "demo" profile.
+    locations: classpath:db/migration
   jackson:
     deserialization:
       fail-on-unknown-properties: true   # request bodies are closed: unknown fields are a 400
