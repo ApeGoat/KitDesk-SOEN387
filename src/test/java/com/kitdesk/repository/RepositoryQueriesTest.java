@@ -121,7 +121,7 @@ class RepositoryQueriesTest {
     @Test
     void everyStateChangeBumpsTheVersion() {
         Reservation r = book(user("alice@kitdesk.test"), unit("CAM-R5-01"), 0, 2);
-        r.pickUp(DAY0, NOW, List.of());
+        r.pickUp(DAY0, NOW, List.of(), List.of());
         reservations.saveAndFlush(r);
         r.markReturned(NOW);
         reservations.saveAndFlush(r);
@@ -134,7 +134,7 @@ class RepositoryQueriesTest {
     void earlyPickupSavesTheMovedStartDate() {
         Unit cam = unit("CAM-R5-01");
         Reservation r = book(user("alice@kitdesk.test"), cam, 3, 5);
-        r.pickUp(DAY0, NOW, reservations.findActiveByUnit(cam));
+        r.pickUp(DAY0, NOW, reservations.findActiveByUnit(cam), List.of());
         reservations.saveAndFlush(r);
         flushAndClear();
 
@@ -148,7 +148,7 @@ class RepositoryQueriesTest {
     void earlyPickupSavesTheTrimmedEndDate() {
         Unit cam = unit("CAM-R5-01");
         Reservation r = book(user("alice@kitdesk.test"), cam, 3, 12); // 10 days
-        r.pickUp(DAY0, NOW, reservations.findActiveByUnit(cam));
+        r.pickUp(DAY0, NOW, reservations.findActiveByUnit(cam), List.of());
         reservations.saveAndFlush(r);
         flushAndClear();
 
@@ -164,7 +164,7 @@ class RepositoryQueriesTest {
         User bob = user("bob@kitdesk.test");
         Unit cam3 = unit("CAM-R5-03");
         Reservation bobs = book(bob, cam3, 0, 2);
-        bobs.pickUp(DAY0, NOW, java.util.List.of());
+        bobs.pickUp(DAY0, NOW, java.util.List.of(), List.of());
         Reservation alices = book(user("alice@kitdesk.test"), cam3, 4, 6);
         book(user("carol@kitdesk.test"), unit("CAM-R5-01"), 4, 6);
         flushAndClear();
@@ -190,7 +190,7 @@ class RepositoryQueriesTest {
         Unit cam3 = unit("CAM-R5-03");
         Unit cam1 = unit("CAM-R5-01");
         Reservation r = book(user("alice@kitdesk.test"), cam3, 4, 6);
-        r.reassignTo(cam1, reservations.findActiveByUnit(cam1));
+        r.reassignTo(cam1, DAY0, reservations.findActiveByUnit(cam1));
         reservations.saveAndFlush(r);
         flushAndClear();
 
@@ -238,21 +238,55 @@ class RepositoryQueriesTest {
     }
 
     @Test
-    void categoryCountOnlyCountsThisStudentsActiveRentalsInThatCategory() {
+    void categoryQueryFindsThisStudentsActiveRentalsInThatCategoryOnTheseDays() {
         User alice = user("alice@kitdesk.test");
         User bob = user("bob@kitdesk.test");
-        book(alice, unit("LEN-50-01"), 0, 1);                 // lens, reserved: counts
+        Reservation reserved = book(alice, unit("LEN-50-01"), 0, 1);      // lens, reserved: found
         Reservation picked = book(alice, unit("LEN-50-02"), 0, 1);
-        picked.pickUp(DAY0, NOW, List.of());                              // lens, picked up: counts
+        picked.pickUp(DAY0, NOW, List.of(), List.of());                  // lens, picked up: found
         Reservation gone = book(alice, unit("LEN-50-03"), 0, 1);
-        gone.cancel(NOW);                                      // lens, cancelled: doesn't
-        book(alice, unit("CAM-R5-01"), 0, 1);                 // other category: doesn't
-        book(bob, unit("LEN-2470-01"), 0, 1);                 // other student: doesn't
+        gone.cancel(NOW);                                                // cancelled: not found
+        book(alice, unit("LEN-2470-01"), 5, 6);                          // lens, other days: not found
+        book(alice, unit("CAM-R5-01"), 0, 1);                            // other category: not found
+        book(bob, unit("LEN-2470-02"), 0, 1);                            // other student: not found
         flushAndClear();
 
         Long lensId = categories.findByCode(CategoryCode.LENS).orElseThrow().getId();
-        assertThat(reservations.countActiveInCategory(alice.getId(), lensId)).isEqualTo(2);
-        assertThat(reservations.countActiveInCategory(bob.getId(), lensId)).isEqualTo(1);
+        assertThat(reservations.findActiveInCategoryOverlapping(alice.getId(), lensId, DAY0, DAY0.plusDays(2), DAY0))
+                .extracting(Reservation::getPublicId)
+                .containsExactlyInAnyOrder(reserved.getPublicId(), picked.getPublicId());
+        assertThat(reservations.findActiveInCategoryOverlapping(alice.getId(), lensId, DAY0, DAY0.plusDays(9), DAY0))
+                .hasSize(3);
+    }
+
+    @Test
+    void categoryQueryKeepsCountingOverdueGearUntilItIsReturned() {
+        User alice = user("alice@kitdesk.test");
+        Reservation late = book(alice, unit("LEN-50-01"), 0, 1);
+        late.pickUp(DAY0, NOW, List.of(), List.of());
+        flushAndClear();
+
+        Long lensId = categories.findByCode(CategoryCode.LENS).orElseThrow().getId();
+        LocalDate day5 = DAY0.plusDays(5);   // ended on day 1, still not back on day 5
+        assertThat(reservations.findActiveInCategoryOverlapping(alice.getId(), lensId, day5, day5.plusDays(1), day5))
+                .hasSize(1);
+        assertThat(reservations.findActiveInCategoryOverlapping(alice.getId(), lensId, day5.plusDays(1), day5.plusDays(2), day5))
+                .as("a booking starting tomorrow doesn't clash yet: the unit may be back by then")
+                .isEmpty();
+    }
+
+    @Test
+    void overdueListIsPickedUpPastTheEndDateOnly() {
+        User alice = user("alice@kitdesk.test");
+        Reservation late = book(alice, unit("CAM-R5-01"), 0, 1);
+        late.pickUp(DAY0, NOW, List.of(), List.of());
+        Reservation onTime = book(user("bob@kitdesk.test"), unit("CAM-R5-02"), 0, 5);
+        onTime.pickUp(DAY0, NOW, List.of(), List.of());
+        book(user("carol@kitdesk.test"), unit("CAM-R5-03"), 0, 1);   // never picked up
+        flushAndClear();
+
+        assertThat(reservations.findOverdue(DAY0.plusDays(3)))
+                .extracting(Reservation::getPublicId).containsExactly(late.getPublicId());
     }
 
     @Test
@@ -260,7 +294,7 @@ class RepositoryQueriesTest {
         User alice = user("alice@kitdesk.test");
         User bob = user("bob@kitdesk.test");
         Reservation alicesCamera = book(alice, unit("CAM-R5-01"), 0, 2);
-        alicesCamera.pickUp(DAY0, NOW, List.of());
+        alicesCamera.pickUp(DAY0, NOW, List.of(), List.of());
         book(bob, unit("CAM-R5-02"), 0, 2); // never picked up: not overdue, even later
         flushAndClear();
 
@@ -275,7 +309,7 @@ class RepositoryQueriesTest {
         User alice = user("alice@kitdesk.test");
         Reservation unclaimed = book(alice, unit("CAM-R5-01"), 0, 1);
         Reservation pickedUp = book(alice, unit("CAM-R5-02"), 0, 1);
-        pickedUp.pickUp(DAY0, NOW, List.of());
+        pickedUp.pickUp(DAY0, NOW, List.of(), List.of());
         book(alice, unit("CAM-R5-03"), 0, 5); // still running
         flushAndClear();
 
