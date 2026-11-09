@@ -8,6 +8,7 @@ import com.kitdesk.domain.CategoryCode;
 import com.kitdesk.domain.EquipmentModel;
 import com.kitdesk.domain.IdempotencyRecord;
 import com.kitdesk.domain.Reservation;
+import com.kitdesk.domain.Role;
 import com.kitdesk.domain.ReservationStatus;
 import com.kitdesk.domain.Unit;
 import com.kitdesk.domain.User;
@@ -44,6 +45,7 @@ class RepositoryQueriesTest {
     @Autowired ReservationRepository reservations;
     @Autowired IdempotencyRepository idempotency;
     @Autowired EntityManager em;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     User user(String email) {
         return users.findByEmailIgnoreCase(email).orElseThrow();
@@ -370,5 +372,30 @@ class RepositoryQueriesTest {
         flushAndClear();
         assertThat(idempotency.findByUserIdAndKey(alice, "old")).isEmpty();
         assertThat(idempotency.findByUserIdAndKey(alice, "fresh")).isPresent();
+    }
+
+    @Test
+    void emailsMustBeUniqueIgnoringCase() {
+        // Inserted directly, so the User constructor's lower-casing can't hide the problem.
+        assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO users (email, password_hash, full_name, role) VALUES ('Alice@KitDesk.test', 'x', 'Copy', 'STUDENT')"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void newUsersAreStoredWithANormalisedEmail() {
+        User u = users.saveAndFlush(new User("  Dana@KitDesk.TEST ", "hash", "Dana", Role.STUDENT, true));
+        assertThat(u.getEmail()).isEqualTo("dana@kitdesk.test");
+        assertThat(users.findByEmailIgnoreCase("DANA@kitdesk.test")).isPresent();
+    }
+
+    @Test
+    void databaseRefusesAnElevenDayReservation() {
+        String insert = "INSERT INTO reservations (student_id, unit_id, start_date, end_date) VALUES ("
+                + "(SELECT id FROM users WHERE email = 'alice@kitdesk.test'), "
+                + "(SELECT id FROM units WHERE asset_tag = 'CAM-R5-01'), ?::date, ?::date)";
+        jdbc.update(insert, "2026-12-01", "2026-12-10");   // 10 days: fine
+        assertThatThrownBy(() -> jdbc.update(insert, "2026-12-20", "2026-12-30"))   // 11 days
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 }
