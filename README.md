@@ -10,7 +10,8 @@ Everything below works except the emails, which come after the milestone. The no
 
 - Browse categories, models and individual units
 - Book a specific unit for up to 10 days
-- Per-student limits per category: 1 camera, 2 lenses, 1 light, 2 sound
+- Per-student limits per category on the same days: 1 camera, 2 lenses, 1 light, 2 sound (a camera for week 1 and another for week 3 is fine)
+- Gear that hasn't been returned keeps its unit busy, even past its end date
 - Cancel any time before pickup; an unclaimed booking expires after its end date
 - Early pickup if the unit is back and nobody is booked in between (the booking still covers at most 10 days)
 - Late-return failsafe: a booking whose unit is overdue moves to an identical free unit
