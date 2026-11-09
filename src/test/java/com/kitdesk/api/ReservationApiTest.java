@@ -104,11 +104,12 @@ class ReservationApiTest extends ApiTestBase {
         }
 
         @Test
-        void categoryLimitIs409() {
-            assertThat(book(ALICE, "CAM-R5-01", 1, 2).status()).isEqualTo(201);
-            Resp second = book(ALICE, "CAM-A7-01", 5, 6);   // cameras: limit 1, whatever the dates
+        void categoryLimitIs409OnOverlappingDays() {
+            assertThat(book(ALICE, "CAM-R5-01", 1, 3).status()).isEqualTo(201);
+            Resp second = book(ALICE, "CAM-A7-01", 3, 4);   // cameras: limit 1, shares day 3
             assertThat(second.status()).isEqualTo(409);
             assertThat(second.code()).isEqualTo("CATEGORY_LIMIT_REACHED");
+            assertThat(book(ALICE, "CAM-A7-01", 5, 6).status()).isEqualTo(201);   // another week: fine
 
             assertThat(book(ALICE, "LEN-50-01", 1, 2).status()).isEqualTo(201);   // lenses: limit 2
             assertThat(book(ALICE, "LEN-50-02", 1, 2).status()).isEqualTo(201);
@@ -120,6 +121,14 @@ class ReservationApiTest extends ApiTestBase {
             Resp first = book(ALICE, "CAM-R5-01", 1, 2);
             assertThat(change(ALICE, first.text("id"), "cancel", 0).status()).isEqualTo(200);
             assertThat(book(ALICE, "CAM-A7-01", 1, 2).status()).isEqualTo(201);
+        }
+
+        @Test
+        void aUnitThatIsOverdueRightNowCantBeBookedFromToday() {
+            insertReservation(BOB, "CAM-R5-01", TODAY.minusDays(4), TODAY.minusDays(2), "PICKED_UP");   // not back
+            Resp r = book(ALICE, "CAM-R5-01", 0, 1);
+            assertThat(r.status()).isEqualTo(409);
+            assertThat(r.code()).isEqualTo("UNIT_UNAVAILABLE");
         }
 
         @Test
@@ -297,6 +306,30 @@ class ReservationApiTest extends ApiTestBase {
             Resp after = get("/reservations/" + id, token(ALICE));
             assertThat(after.text("startDate")).isEqualTo(TODAY.plusDays(3).toString());
             assertThat(after.text("status")).isEqualTo("RESERVED");
+        }
+
+        @Test
+        void onTimePickupRefusedWhileTheUnitIsOverdueWithSomeoneElse() {
+            String id = book(ALICE, "CAM-R5-01", 1, 3).text("id");
+            // Bob's earlier booking of the same unit ended yesterday and he still has it.
+            insertReservation(BOB, "CAM-R5-01", TODAY.minusDays(3), TODAY.minusDays(1), "PICKED_UP");
+            // Alice's booking starts today. (Set directly: booking it from today now would be refused,
+            // because the unit is overdue. That was made before Bob was late.)
+            jdbc.update("UPDATE reservations SET start_date = ? WHERE public_id = ?", TODAY, id);
+            Resp r = change(STAFF, id, "pickup", 0);
+            assertThat(r.status()).isEqualTo(409);
+            assertThat(r.code()).isEqualTo("UNIT_UNAVAILABLE");
+            assertThat(get("/reservations/" + id, token(ALICE)).text("status")).isEqualTo("RESERVED");
+        }
+
+        @Test
+        void earlyPickupRefusedIfItWouldBreakTheCategoryLimit() {
+            book(ALICE, "CAM-A7-01", 0, 1);                       // a camera today and tomorrow
+            String id = book(ALICE, "CAM-R5-01", 3, 5).text("id"); // another one from day 3: fine
+            Resp r = change(STAFF, id, "pickup", 0);               // picking it up today adds days 0-2
+            assertThat(r.status()).isEqualTo(409);
+            assertThat(r.code()).isEqualTo("CATEGORY_LIMIT_REACHED");
+            assertThat(get("/reservations/" + id, token(ALICE)).text("startDate")).isEqualTo(TODAY.plusDays(3).toString());
         }
 
         @Test
