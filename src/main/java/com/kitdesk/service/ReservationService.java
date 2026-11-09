@@ -24,7 +24,9 @@ import org.springframework.transaction.annotation.Transactional;
  * The booking use cases (§5.6): book, list, get, cancel, pick up, return.
  *
  * <p>Each write is one transaction, opened here. This class owns the rules that look across
- * many reservations (category limit, subscription, overdue lock-out), the per-user rules (a
+ * many reservations (subscription, overdue lock-out, and the category limit, where this class
+ * loads the student's overlapping rentals under the student lock and
+ * {@code Reservation.checkCategoryLimit} counts them per day), the per-user rules (a
  * student only sees and cancels their own bookings; pickup and return are staff-only), and the
  * lock order: <b>student row first, then unit row</b>, always. Rules about one reservation's own
  * data (date window, status changes, early pickup) are the entities' job; this class calls them.
@@ -71,8 +73,8 @@ public class ReservationService {
 
     /**
      * Books a unit for the calling student. Checks, in order: role, dates, then (holding the
-     * student's lock) subscription and overdue gear, then (holding the unit's lock) the category
-     * limit and the unit's calendar. The database's exclusion constraint is the last line of
+     * student's lock) subscription and overdue gear, then (holding the unit's lock too) the
+     * per-day category limit and the unit's calendar. The database's exclusion constraint is the last line of
      * defence if two overlapping bookings ever got this far at once.
      */
     @Transactional
