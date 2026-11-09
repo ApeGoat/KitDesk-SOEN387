@@ -24,13 +24,13 @@ class UnitTest {
 
     @Test
     void freeWhenNothingIsBooked() {
-        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(3), List.of())).doesNotThrowAnyException();
+        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(3), TODAY, List.of())).doesNotThrowAnyException();
     }
 
     @Test
     void refusedWhenAnActiveBookingSharesADay() {
         List<Reservation> booked = List.of(existing(2, 4));
-        assertThatThrownBy(() -> unit.assertAvailable(TODAY.plusDays(4), TODAY.plusDays(6), booked))
+        assertThatThrownBy(() -> unit.assertAvailable(TODAY.plusDays(4), TODAY.plusDays(6), TODAY, booked))
                 .isInstanceOf(DomainRuleViolation.class)
                 .hasMessageContaining("CAM-R5-03")
                 .extracting(e -> ((DomainRuleViolation) e).getCode())
@@ -40,16 +40,16 @@ class UnitTest {
     @Test
     void refusedWhenThePickedUpBookingSharesADay() {
         Reservation out = existing(0, 4);
-        out.pickUp(TODAY, NOW, List.of());
-        assertThatThrownBy(() -> unit.assertAvailable(TODAY.plusDays(3), TODAY.plusDays(5), List.of(out)))
+        out.pickUp(TODAY, NOW, List.of(), List.of());
+        assertThatThrownBy(() -> unit.assertAvailable(TODAY.plusDays(3), TODAY.plusDays(5), TODAY, List.of(out)))
                 .isInstanceOf(DomainRuleViolation.class);
     }
 
     @Test
     void backToBackBookingsAreFine() {
         List<Reservation> booked = List.of(existing(2, 4));
-        assertThatCode(() -> unit.assertAvailable(TODAY.plusDays(5), TODAY.plusDays(7), booked)).doesNotThrowAnyException();
-        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(1), booked)).doesNotThrowAnyException();
+        assertThatCode(() -> unit.assertAvailable(TODAY.plusDays(5), TODAY.plusDays(7), TODAY, booked)).doesNotThrowAnyException();
+        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(1), TODAY, booked)).doesNotThrowAnyException();
     }
 
     @Test
@@ -57,20 +57,51 @@ class UnitTest {
         Reservation cancelled = existing(0, 3);
         cancelled.cancel(NOW);
         Reservation returned = existing(0, 3);
-        returned.pickUp(TODAY, NOW, List.of());
+        returned.pickUp(TODAY, NOW, List.of(), List.of());
         returned.markReturned(NOW);
         Reservation expired = existing(0, 3);
         expired.expireIfUnclaimed(TODAY.plusDays(4));
 
-        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(3), List.of(cancelled, returned, expired)))
+        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(3), TODAY, List.of(cancelled, returned, expired)))
                 .doesNotThrowAnyException();
     }
 
     @Test
     void outOfServiceUnitIsNeverAvailable() {
         ReflectionTestUtils.setField(unit, "active", false);
-        assertThatThrownBy(() -> unit.assertAvailable(TODAY, TODAY, List.of()))
+        assertThatThrownBy(() -> unit.assertAvailable(TODAY, TODAY, TODAY, List.of()))
                 .isInstanceOf(DomainRuleViolation.class)
                 .hasMessageContaining("out of service");
+    }
+
+    /** Bob's booking ended two days ago but he still has the unit. */
+    Reservation overdueHolder() {
+        Reservation old = Reservation.create(alice, unit, TODAY.minusDays(4), TODAY.minusDays(2), TODAY.minusDays(4), NOW);
+        old.pickUp(TODAY.minusDays(4), NOW, List.of(), List.of());
+        return old;
+    }
+
+    @Test
+    void anOverdueUnitIsNotAvailableToday() {
+        List<Reservation> out = List.of(overdueHolder());
+        assertThatThrownBy(() -> unit.assertAvailable(TODAY, TODAY.plusDays(2), TODAY, out))
+                .isInstanceOf(DomainRuleViolation.class)
+                .hasMessageContaining("not returned yet");
+    }
+
+    @Test
+    void aBookingAfterTheHoldersEndDateIsStillRefusedWhileTheyHaveIt() {
+        // Starts after the holder's original end date (day -2), but the unit is still out today.
+        List<Reservation> out = List.of(overdueHolder());
+        assertThatThrownBy(() -> unit.assertAvailable(TODAY.minusDays(1).plusDays(1), TODAY.plusDays(1), TODAY, out))
+                .isInstanceOf(DomainRuleViolation.class);
+    }
+
+    @Test
+    void onceReturnedTheSameBookingIsFine() {
+        Reservation old = overdueHolder();
+        old.markReturned(NOW);
+        assertThatCode(() -> unit.assertAvailable(TODAY, TODAY.plusDays(2), TODAY, List.of(old)))
+                .doesNotThrowAnyException();
     }
 }

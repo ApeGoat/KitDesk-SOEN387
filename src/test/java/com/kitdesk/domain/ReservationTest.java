@@ -106,18 +106,18 @@ class ReservationTest {
         @Test
         void cannotCancelAfterPickup() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW, List.of());
+            r.pickUp(TODAY, NOW, List.of(), List.of());
             assertRule(() -> r.cancel(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void pickupOnAnyDayInsideTheRange() {
             Reservation first = book(TODAY, TODAY.plusDays(4));
-            first.pickUp(TODAY, NOW, List.of());
+            first.pickUp(TODAY, NOW, List.of(), List.of());
             assertThat(first.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
 
             Reservation late = book(TODAY, TODAY.plusDays(4));
-            late.pickUp(TODAY.plusDays(4), NOW, List.of()); // last day still counts
+            late.pickUp(TODAY.plusDays(4), NOW, List.of(), List.of()); // last day still counts
             assertThat(late.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
             assertThat(late.getEndDate()).isEqualTo(TODAY.plusDays(4)); // late pickup never extends the end date
         }
@@ -126,21 +126,21 @@ class ReservationTest {
         @Test
         void noPickupAfterTheEndDate() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            assertRule(() -> r.pickUp(TODAY.plusDays(3), NOW, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            assertRule(() -> r.pickUp(TODAY.plusDays(3), NOW, List.of(), List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void cannotPickUpTwice() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW, List.of());
-            assertRule(() -> r.pickUp(TODAY, NOW, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            r.pickUp(TODAY, NOW, List.of(), List.of());
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(), List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void returnOnlyAfterPickup() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
             assertRule(() -> r.markReturned(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
-            r.pickUp(TODAY, NOW, List.of());
+            r.pickUp(TODAY, NOW, List.of(), List.of());
             r.markReturned(NOW);
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.RETURNED);
             assertRule(() -> r.markReturned(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
@@ -149,7 +149,7 @@ class ReservationTest {
         @Test
         void overdueGearCanStillBeReturned() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW, List.of());
+            r.pickUp(TODAY, NOW, List.of(), List.of());
             assertThat(r.isOverdue(TODAY.plusDays(10))).isTrue();
             r.markReturned(NOW);
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.RETURNED);
@@ -169,7 +169,7 @@ class ReservationTest {
         @Test
         void earlyPickupOfAFreeUnitMovesTheStartToToday() {
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            r.pickUp(TODAY, NOW, List.of(r));
+            r.pickUp(TODAY, NOW, List.of(r), List.of());
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
             assertThat(r.getStartDate()).isEqualTo(TODAY);
             assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(5)); // end never moves
@@ -178,9 +178,9 @@ class ReservationTest {
         @Test
         void refusedWhileTheUnitIsStillOutWithSomeoneElse() {
             Reservation bobHasIt = bobs(0, 1);
-            bobHasIt.pickUp(TODAY, NOW, List.of());
+            bobHasIt.pickUp(TODAY, NOW, List.of(), List.of());
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobHasIt, r)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobHasIt, r), List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
             assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(3)); // nothing changed
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
         }
@@ -189,25 +189,25 @@ class ReservationTest {
         void refusedWhileAnOverdueHolderStillHasTheUnit() {
             // Bob's booking ended in the past but he never brought it back: the unit isn't here.
             Reservation bobsOld = Reservation.create(bob, unit, TODAY.minusDays(5), TODAY.minusDays(3), TODAY.minusDays(5), NOW);
-            bobsOld.pickUp(TODAY.minusDays(5), NOW, List.of());
+            bobsOld.pickUp(TODAY.minusDays(5), NOW, List.of(), List.of());
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobsOld, r)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobsOld, r), List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
         }
 
         @Test
         void refusedWhenAnotherBookingAwaitsPickupInTheGap() {
             Reservation bobLater = bobs(1, 2);  // between today and Alice's start
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobLater, r)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobLater, r), List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
         }
 
         @Test
         void aBookingReturnedThisMorningDoesNotBlock() {
             Reservation bobsFinished = bobs(0, 0);
-            bobsFinished.pickUp(TODAY, NOW, List.of());
+            bobsFinished.pickUp(TODAY, NOW, List.of(), List.of());
             bobsFinished.markReturned(NOW); // returned this morning
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            r.pickUp(TODAY, NOW, List.of(bobsFinished, r));
+            r.pickUp(TODAY, NOW, List.of(bobsFinished, r), List.of());
             assertThat(r.getStartDate()).isEqualTo(TODAY);
         }
 
@@ -215,7 +215,7 @@ class ReservationTest {
         void bookingsAfterTheOriginalStartDoNotBlock() {
             Reservation bobAfter = bobs(6, 8);
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            r.pickUp(TODAY, NOW, List.of(bobAfter, r));
+            r.pickUp(TODAY, NOW, List.of(bobAfter, r), List.of());
             assertThat(r.getStartDate()).isEqualTo(TODAY);
         }
 
@@ -224,14 +224,14 @@ class ReservationTest {
             Reservation bobCancelled = bobs(1, 2);
             bobCancelled.cancel(NOW);
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
-            r.pickUp(TODAY, NOW, List.of(bobCancelled, r));
+            r.pickUp(TODAY, NOW, List.of(bobCancelled, r), List.of());
             assertThat(r.getStartDate()).isEqualTo(TODAY);
         }
 
         @Test
         void endDateMovesBackSoTheBookingStaysAtTenDays() {
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(12)); // 10 days already
-            r.pickUp(TODAY, NOW, List.of(r));
+            r.pickUp(TODAY, NOW, List.of(r), List.of());
             assertThat(r.getStartDate()).isEqualTo(TODAY);
             assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(9));
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
@@ -240,7 +240,7 @@ class ReservationTest {
         @Test
         void shortBookingKeepsItsEndDate() {
             Reservation r = book(TODAY.plusDays(2), TODAY.plusDays(4));
-            r.pickUp(TODAY, NOW, List.of(r));
+            r.pickUp(TODAY, NOW, List.of(r), List.of());
             assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(4));
         }
 
@@ -248,7 +248,7 @@ class ReservationTest {
         void refusedEarlyPickupChangesNeitherDate() {
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(12));
             Reservation gap = book(TODAY.plusDays(1), TODAY.plusDays(2));
-            assertRule(() -> r.pickUp(TODAY, NOW, List.of(r, gap)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(r, gap), List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
             assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(3));
             assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(12));
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
@@ -257,7 +257,138 @@ class ReservationTest {
         @Test
         void earlyPickupUpToTheTenDayLimitIsFine() {
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(9)); // today..day 9 = 10 days
-            r.pickUp(TODAY, NOW, List.of(r));
+            r.pickUp(TODAY, NOW, List.of(r), List.of());
+            assertThat(r.getStartDate()).isEqualTo(TODAY);
+        }
+    }
+
+    @Nested
+    class UnitMustBeBackForAnyPickup {
+
+        final User bob = new User("bob@kitdesk.test", "hash", "Bob", Role.STUDENT, true);
+
+        /** Bob picked the unit up 5 days ago for 3 days and still hasn't brought it back. */
+        Reservation bobsOverdue() {
+            Reservation old = Reservation.create(bob, unit, TODAY.minusDays(5), TODAY.minusDays(3), TODAY.minusDays(5), NOW);
+            old.pickUp(TODAY.minusDays(5), NOW, List.of(), List.of());
+            return old;
+        }
+
+        @Test
+        void onTimePickupRefusedWhileTheUnitIsOverdueWithSomeoneElse() {
+            Reservation bobs = bobsOverdue();
+            Reservation r = book(TODAY, TODAY.plusDays(2));   // starts today
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(bobs, r), List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+            assertThat(r.getPickedUpAt()).isNull();
+        }
+
+        @Test
+        void latePickupRefusedInTheSameSituation() {
+            Reservation bobs = bobsOverdue();
+            Reservation r = book(TODAY, TODAY.plusDays(4));
+            LocalDate dayTwo = TODAY.plusDays(2);   // between start and end
+            assertRule(() -> r.pickUp(dayTwo, NOW, List.of(bobs, r), List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        }
+
+        @Test
+        void onceTheUnitIsReturnedThePickupGoesThrough() {
+            Reservation bobs = bobsOverdue();
+            bobs.markReturned(NOW);
+            Reservation r = book(TODAY, TODAY.plusDays(2));
+            r.pickUp(TODAY, NOW, List.of(bobs, r), List.of());
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
+        }
+    }
+
+    @Nested
+    class OccupiedUntil {
+
+        @Test
+        void aReservedBookingOccupiesItsUnitThroughItsEndDate() {
+            Reservation r = book(TODAY, TODAY.plusDays(2));
+            assertThat(r.occupiedUntil(TODAY.plusDays(5))).isEqualTo(TODAY.plusDays(2));
+        }
+
+        @Test
+        void aPickedUpUnitIsOccupiedUntilReturnedEvenPastItsEndDate() {
+            Reservation r = book(TODAY, TODAY.plusDays(2));
+            r.pickUp(TODAY, NOW, List.of(), List.of());
+            assertThat(r.occupiedUntil(TODAY.plusDays(1))).isEqualTo(TODAY.plusDays(2));   // not late yet
+            assertThat(r.occupiedUntil(TODAY.plusDays(5))).isEqualTo(TODAY.plusDays(5));   // overdue: busy today
+            r.markReturned(NOW);
+            assertThat(r.occupies(TODAY.plusDays(5), TODAY.plusDays(5), TODAY.plusDays(5))).isFalse();
+        }
+    }
+
+    @Nested
+    class CategoryLimitPerDay {
+
+        final Category lenses = new Category(CategoryCode.LENS, "Lenses", 2);
+        final EquipmentModel fifty = new EquipmentModel(lenses, "Canon", "RF 50mm f/1.8", null);
+
+        Reservation camera(int fromDay, int toDay) {
+            return Reservation.create(student, new Unit("CAM-" + fromDay + "-" + toDay, r5),
+                    TODAY.plusDays(fromDay), TODAY.plusDays(toDay), TODAY, NOW);
+        }
+
+        Reservation lens(int fromDay, int toDay) {
+            return Reservation.create(student, new Unit("LEN-" + fromDay + "-" + toDay, fifty),
+                    TODAY.plusDays(fromDay), TODAY.plusDays(toDay), TODAY, NOW);
+        }
+
+        void check(Category c, int fromDay, int toDay, List<Reservation> held) {
+            Reservation.checkCategoryLimit(c, TODAY.plusDays(fromDay), TODAY.plusDays(toDay), TODAY, held);
+        }
+
+        @Test
+        void aSecondCameraForADifferentWeekIsFine() {
+            List<Reservation> held = List.of(camera(1, 3));
+            check(cameras, 5, 7, held);   // no shared day
+            assertRule(() -> check(cameras, 3, 5, held), DomainRuleViolation.CATEGORY_LIMIT_REACHED);   // shares day 3
+        }
+
+        @Test
+        void theLimitIsPerDayNotATotal() {
+            // Limit 2. Days 1-2 and 5-6 are taken once each; a new booking for days 1-6 never
+            // makes any single day hold more than 2, so it's allowed (a total count would say 2).
+            check(lenses, 1, 6, List.of(lens(1, 2), lens(5, 6)));
+            assertRule(() -> check(lenses, 1, 6, List.of(lens(1, 2), lens(2, 3))),
+                    DomainRuleViolation.CATEGORY_LIMIT_REACHED);   // day 2 already has 2
+        }
+
+        @Test
+        void finishedBookingsDontCount() {
+            Reservation cancelled = camera(1, 3);
+            cancelled.cancel(NOW);
+            check(cameras, 1, 3, List.of(cancelled));
+        }
+
+        @Test
+        void anOverdueCameraBlocksANewCameraStartingToday() {
+            Reservation old = Reservation.create(student, new Unit("CAM-OLD", r5),
+                    TODAY.minusDays(5), TODAY.minusDays(3), TODAY.minusDays(5), NOW);
+            old.pickUp(TODAY.minusDays(5), NOW, List.of(), List.of());   // never brought back
+            assertRule(() -> check(cameras, 0, 2, List.of(old)), DomainRuleViolation.CATEGORY_LIMIT_REACHED);
+        }
+
+        @Test
+        void earlyPickupThatWouldGoOverTheLimitOnAnAddedDayIsRefused() {
+            Reservation other = camera(0, 1);           // Alice already has a camera today and tomorrow
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            // Picking r up today would add days 0-2, and days 0-1 already have a camera.
+            assertRule(() -> r.pickUp(TODAY, NOW, List.of(r), List.of(other, r)),
+                    DomainRuleViolation.CATEGORY_LIMIT_REACHED);
+            assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(3));
+            assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(5));
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        }
+
+        @Test
+        void earlyPickupDoesNotCountTheBookingAgainstItself() {
+            Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
+            r.pickUp(TODAY, NOW, List.of(r), List.of(r));
             assertThat(r.getStartDate()).isEqualTo(TODAY);
         }
     }
@@ -272,7 +403,7 @@ class ReservationTest {
         @Test
         void movesToAFreeUnitOfTheSameModelKeepingTheDates() {
             Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
-            r.reassignTo(sameModel, List.of());
+            r.reassignTo(sameModel, TODAY, List.of());
             assertThat(r.getUnit()).isSameAs(sameModel);
             assertThat(r.getStartDate()).isEqualTo(TODAY.plusDays(1));
             assertThat(r.getEndDate()).isEqualTo(TODAY.plusDays(3));
@@ -282,21 +413,31 @@ class ReservationTest {
         @Test
         void refusesADifferentModel() {
             Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
-            assertRule(() -> r.reassignTo(otherModel, List.of()), DomainRuleViolation.INVALID_REQUEST);
+            assertRule(() -> r.reassignTo(otherModel, TODAY, List.of()), DomainRuleViolation.INVALID_REQUEST);
             assertThat(r.getUnit()).isSameAs(unit);
         }
 
         @Test
         void refusesTheSameUnit() {
             Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
-            assertRule(() -> r.reassignTo(unit, List.of()), DomainRuleViolation.INVALID_REQUEST);
+            assertRule(() -> r.reassignTo(unit, TODAY, List.of()), DomainRuleViolation.INVALID_REQUEST);
         }
 
         @Test
         void refusesAReplacementBookedOnAnyDayOfTheBooking() {
             Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
             Reservation bobOnReplacement = Reservation.create(bob, sameModel, TODAY.plusDays(3), TODAY.plusDays(4), TODAY, NOW);
-            assertRule(() -> r.reassignTo(sameModel, List.of(bobOnReplacement)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertRule(() -> r.reassignTo(sameModel, TODAY, List.of(bobOnReplacement)), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertThat(r.getUnit()).isSameAs(unit);
+        }
+
+        @Test
+        void refusesAReplacementThatIsOverdueWithSomeoneElse() {
+            // The spare's last booking ended yesterday, but Bob never brought it back.
+            Reservation bobsOnSpare = Reservation.create(bob, sameModel, TODAY.minusDays(3), TODAY.minusDays(1), TODAY.minusDays(3), NOW);
+            bobsOnSpare.pickUp(TODAY.minusDays(3), NOW, List.of(), List.of());
+            Reservation r = book(TODAY, TODAY.plusDays(2));
+            assertRule(() -> r.reassignTo(sameModel, TODAY, List.of(bobsOnSpare)), DomainRuleViolation.UNIT_UNAVAILABLE);
             assertThat(r.getUnit()).isSameAs(unit);
         }
 
@@ -304,14 +445,14 @@ class ReservationTest {
         void refusesAnOutOfServiceReplacement() {
             org.springframework.test.util.ReflectionTestUtils.setField(sameModel, "active", false);
             Reservation r = book(TODAY.plusDays(1), TODAY.plusDays(3));
-            assertRule(() -> r.reassignTo(sameModel, List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
+            assertRule(() -> r.reassignTo(sameModel, TODAY, List.of()), DomainRuleViolation.UNIT_UNAVAILABLE);
         }
 
         @Test
         void onlyBookingsNotYetPickedUpCanMove() {
             Reservation r = book(TODAY, TODAY.plusDays(3));
-            r.pickUp(TODAY, NOW, List.of());
-            assertRule(() -> r.reassignTo(sameModel, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            r.pickUp(TODAY, NOW, List.of(), List.of());
+            assertRule(() -> r.reassignTo(sameModel, TODAY, List.of()), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
     }
 
@@ -336,7 +477,7 @@ class ReservationTest {
         @Test
         void pickedUpBookingNeverExpires() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.pickUp(TODAY, NOW, List.of());
+            r.pickUp(TODAY, NOW, List.of(), List.of());
             assertThat(r.expireIfUnclaimed(TODAY.plusDays(30))).isFalse();
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.PICKED_UP);
         }
@@ -345,7 +486,7 @@ class ReservationTest {
         void overdueOnlyAfterTheEndDateAndOnlyWhenPickedUp() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
             assertThat(r.isOverdue(TODAY.plusDays(5))).isFalse(); // never picked up: not overdue
-            r.pickUp(TODAY, NOW, List.of());
+            r.pickUp(TODAY, NOW, List.of(), List.of());
             assertThat(r.isOverdue(TODAY.plusDays(2))).isFalse(); // last day: still on time
             assertThat(r.isOverdue(TODAY.plusDays(3))).isTrue();
         }
