@@ -60,13 +60,35 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
             order by r.startDate""")
     List<Reservation> findActiveByUnit(@Param("unit") Unit unit);
 
-    /** How many active reservations the student holds in a category, whatever their dates. */
+    /**
+     * The student's active reservations in a category that occupy any day of [start, end], for
+     * the per-day category limit ({@code Reservation.checkCategoryLimit}). A PICKED_UP one occupies
+     * its unit until it's returned, so an overdue one counts through today:
+     * occupied until max(endDate, today) is on or after start
+     * means endDate >= start, or it is PICKED_UP and today >= start.
+     * Call while holding the student's row lock.
+     */
     @Query("""
-            select count(r) from Reservation r
+            select r from Reservation r
             where r.student.id = :studentId and r.unit.model.category.id = :categoryId
               and r.status in (com.kitdesk.domain.ReservationStatus.RESERVED,
-                               com.kitdesk.domain.ReservationStatus.PICKED_UP)""")
-    long countActiveInCategory(@Param("studentId") Long studentId, @Param("categoryId") Long categoryId);
+                               com.kitdesk.domain.ReservationStatus.PICKED_UP)
+              and r.startDate <= :end
+              and (r.endDate >= :start
+                   or (r.status = com.kitdesk.domain.ReservationStatus.PICKED_UP and :today >= :start))""")
+    List<Reservation> findActiveInCategoryOverlapping(@Param("studentId") Long studentId,
+                                                      @Param("categoryId") Long categoryId,
+                                                      @Param("start") LocalDate start,
+                                                      @Param("end") LocalDate end,
+                                                      @Param("today") LocalDate today);
+
+    /** Overdue rentals (PICKED_UP and past endDate), oldest due date first: the staff "overdue only" list. */
+    @Query("""
+            select r from Reservation r
+            join fetch r.unit u join fetch u.model m join fetch m.category
+            where r.status = com.kitdesk.domain.ReservationStatus.PICKED_UP and r.endDate < :today
+            order by r.endDate""")
+    List<Reservation> findOverdue(@Param("today") LocalDate today);
 
     /** Does the student hold gear that's past its end date? (Overdue = PICKED_UP and today > endDate.) */
     @Query("""

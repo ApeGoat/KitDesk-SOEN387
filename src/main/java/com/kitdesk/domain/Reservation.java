@@ -15,6 +15,7 @@ import jakarta.persistence.Version;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -133,50 +134,60 @@ public class Reservation {
      * Staff hand the unit over. Only a RESERVED reservation, and not after its endDate (by then
      * the booking has lapsed).
      *
-     * <p><b>Early pickup</b> (today is before startDate) is allowed only if all of these hold:
+     * <p>Every pickup (early, on time or late) needs the unit to be <b>back at the desk</b>: no
+     * other reservation of it may still be PICKED_UP, whatever its dates. A picked-up unit stays
+     * occupied until it is returned (see {@link #occupiedUntil}).
+     *
+     * <p><b>Early pickup</b> (today is before startDate) also needs:
      * <ul>
-     *   <li>the unit is back at the desk: no other reservation of it is PICKED_UP;</li>
-     *   <li>no other active reservation of the unit falls on any day from today up to the day
-     *       before startDate.</li>
+     *   <li>no other active reservation of the unit on any day from today up to the day before
+     *       startDate;</li>
+     *   <li>the student to stay within the category limit on the days the booking gains.</li>
      * </ul>
      * Then startDate moves to today. The booking still covers at most {@value #MAX_DAYS} days:
-     * if endDate is later than today + {@value #MAX_DAYS} - 1, it moves back to that day. {@code unitBookings} is the unit's
-     * active reservations, loaded by the data source layer while the unit row is locked.
+     * if endDate is later than today + {@value #MAX_DAYS} - 1, it moves back to that day.
+     * A refused pickup changes nothing.
+     *
+     * @param unitBookings   the unit's active reservations, loaded while the unit row is locked
+     * @param heldInCategory the student's active reservations in this unit's category, loaded
+     *                       while the student row is locked (only used for an early pickup)
      */
-    public void pickUp(LocalDate today, Instant now, Collection<Reservation> unitBookings) {
+    public void pickUp(LocalDate today, Instant now, Collection<Reservation> unitBookings,
+                       Collection<Reservation> heldInCategory) {
         requireStatus(ReservationStatus.RESERVED, "picked up");
         if (today.isAfter(endDate)) {
             throw new DomainRuleViolation(DomainRuleViolation.INVALID_RESERVATION_STATE,
                     "This reservation ended on " + endDate + " and was never picked up.");
         }
+        for (Reservation other : unitBookings) {
+            if (!isSameReservation(other) && other.status == ReservationStatus.PICKED_UP) {
+                throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
+                        "Pickup refused: " + unit.getAssetTag() + " has not been returned yet.");
+            }
+        }
         if (today.isBefore(startDate)) {
-            moveStartEarlierFor(today, unitBookings);
+            moveStartEarlierFor(today, unitBookings, heldInCategory);
         }
         status = ReservationStatus.PICKED_UP;
         pickedUpAt = now;
     }
 
-    private void moveStartEarlierFor(LocalDate today, Collection<Reservation> unitBookings) {
+    private void moveStartEarlierFor(LocalDate today, Collection<Reservation> unitBookings,
+                                     Collection<Reservation> heldInCategory) {
         LocalDate dayBeforeStart = startDate.minusDays(1);
         for (Reservation other : unitBookings) {
-            if (other == this || other.publicId.equals(publicId) || !other.isActive()) {
-                continue;
-            }
-            if (other.status == ReservationStatus.PICKED_UP) {
-                throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
-                        "Early pickup refused: " + unit.getAssetTag() + " has not been returned yet.");
-            }
-            if (other.overlaps(today, dayBeforeStart)) {
+            if (!isSameReservation(other) && other.occupies(today, dayBeforeStart, today)) {
                 throw new DomainRuleViolation(DomainRuleViolation.UNIT_UNAVAILABLE,
                         "Early pickup refused: " + unit.getAssetTag() + " is booked from "
                                 + other.startDate + " to " + other.endDate + ".");
             }
         }
-        startDate = today;
         LocalDate latestEnd = today.plusDays(MAX_DAYS - 1);
-        if (endDate.isAfter(latestEnd)) {
-            endDate = latestEnd;
-        }
+        LocalDate newEnd = endDate.isAfter(latestEnd) ? latestEnd : endDate;
+        List<Reservation> others = heldInCategory.stream().filter(r -> !isSameReservation(r)).toList();
+        checkCategoryLimit(unit.getModel().getCategory(), today, newEnd, today, others);
+        startDate = today;
+        endDate = newEnd;
     }
 
     /**
@@ -185,12 +196,13 @@ public class Reservation {
      * free for every day of this booking. Dates and everything else stay the same.
      *
      * @param replacement         another unit of the same model
+     * @param today               today, so a replacement still out past its end date counts as busy
      * @param replacementBookings the replacement's active reservations, loaded while it is locked
      * @throws DomainRuleViolation INVALID_RESERVATION_STATE if not RESERVED,
      *                             INVALID_REQUEST if the replacement isn't an identical unit,
      *                             UNIT_UNAVAILABLE if the replacement is booked or out of service
      */
-    public void reassignTo(Unit replacement, Collection<Reservation> replacementBookings) {
+    public void reassignTo(Unit replacement, LocalDate today, Collection<Reservation> replacementBookings) {
         requireStatus(ReservationStatus.RESERVED, "moved to another unit");
         if (replacement == unit || (replacement.getId() != null && replacement.getId().equals(unit.getId()))) {
             throw new DomainRuleViolation(DomainRuleViolation.INVALID_REQUEST,
@@ -200,7 +212,7 @@ public class Reservation {
             throw new DomainRuleViolation(DomainRuleViolation.INVALID_REQUEST,
                     replacement.getAssetTag() + " is not the same model as " + unit.getAssetTag() + ".");
         }
-        replacement.assertAvailable(startDate, endDate, replacementBookings);
+        replacement.assertAvailable(startDate, endDate, today, replacementBookings);
         unit = replacement;
     }
 
@@ -242,6 +254,52 @@ public class Reservation {
     /** Picked up and today is after endDate. A flag, not a status. */
     public boolean isOverdue(LocalDate today) {
         return status == ReservationStatus.PICKED_UP && today.isAfter(endDate);
+    }
+
+    /**
+     * The last day this reservation keeps its unit busy. Normally endDate; but a PICKED_UP unit
+     * isn't free until it comes back, so if it's overdue it stays occupied through today.
+     * The one place this rule lives: availability, pickup and the category limit all use it.
+     */
+    public LocalDate occupiedUntil(LocalDate today) {
+        if (status == ReservationStatus.PICKED_UP && today.isAfter(endDate)) {
+            return today;
+        }
+        return endDate;
+    }
+
+    /** Is this an active reservation that keeps its unit busy on any day of [from, to]? */
+    public boolean occupies(LocalDate from, LocalDate to, LocalDate today) {
+        return isActive() && !startDate.isAfter(to) && !from.isAfter(occupiedUntil(today));
+    }
+
+    /**
+     * The category limit, checked per day: on every day of [start, end], the student may hold at
+     * most {@code category.rentalLimit} active rentals in the category. "At once" means on the
+     * same day, so a camera for week 1 and another for week 3 are both fine with a limit of 1.
+     * A per-day check, not a total: with a limit of 2, bookings on days 1-2 and 5-6 still leave
+     * room for one on days 1-6. Overdue gear counts until it's returned ({@link #occupiedUntil}).
+     *
+     * <p>The service loads {@code held} (the student's active reservations in the category) while
+     * holding the student's row lock, which is what makes this safe under concurrency.
+     *
+     * @throws DomainRuleViolation CATEGORY_LIMIT_REACHED naming the first full day
+     */
+    public static void checkCategoryLimit(Category category, LocalDate start, LocalDate end, LocalDate today,
+                                          Collection<Reservation> held) {
+        for (LocalDate day = start; !day.isAfter(end); day = day.plusDays(1)) {
+            LocalDate d = day;
+            long onThatDay = held.stream().filter(r -> r.occupies(d, d, today)).count();
+            if (onThatDay >= category.getRentalLimit()) {
+                throw new DomainRuleViolation(DomainRuleViolation.CATEGORY_LIMIT_REACHED,
+                        "You already hold " + category.getRentalLimit() + " " + category.getName().toLowerCase()
+                                + " rental(s) on " + d + ", the most allowed at once.");
+            }
+        }
+    }
+
+    private boolean isSameReservation(Reservation other) {
+        return other == this || (other.publicId != null && other.publicId.equals(publicId));
     }
 
     /** Do the two inclusive ranges share at least one day? */
