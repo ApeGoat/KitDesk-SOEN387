@@ -83,7 +83,9 @@ Real values go in `.env`, which is git-ignored. Never commit secrets.
 
 ## Demo accounts
 
-Seeded by migration `V2`. Every password is `password`.
+Loaded only with the **`demo` profile**, from `src/main/resources/db/demo/`. Docker Compose and the tests turn that profile on; a real deployment leaves it off, so these accounts never exist there. Every password is `password`.
+
+> **Upgrading an existing local database:** the demo accounts moved out of migration `V2` (Nov 9). A database created before that fails Flyway's check on V2. Reset it once with `docker compose down -v`, then `docker compose up --build`.
 
 | Email | Role | Notes |
 |---|---|---|

@@ -1,5 +1,5 @@
--- Demo data: the four categories with their limits, some models and units, and test accounts.
--- Every seeded account's password is "password" (bcrypt hash below). Demo use only.
+-- Catalogue data: the four categories with their limits, the models and the units.
+-- Test accounts are not here: they are in db/demo and only load with the "demo" profile.
 
 INSERT INTO categories (code, name, rental_limit) VALUES
     ('CAMERA',   'Cameras',  1),
@@ -30,19 +30,3 @@ INSERT INTO units (asset_tag, model_id) VALUES
     ('SND-NTG3-01', (SELECT id FROM models WHERE name = 'NTG3')),
     ('SND-NTG3-02', (SELECT id FROM models WHERE name = 'NTG3')),
     ('SND-H6-01',   (SELECT id FROM models WHERE name = 'H6'));
-
-INSERT INTO users (email, password_hash, full_name, role, subscription_active) VALUES
-    ('staff@kitdesk.test', '$2b$10$R.m9r6cIa02wkiKcnJSa.OHr6LHRQOdgEIfMFLzelhc8v7ZKMcC9G', 'Desk Staff',     'STAFF',   TRUE),
-    ('alice@kitdesk.test', '$2b$10$R.m9r6cIa02wkiKcnJSa.OHr6LHRQOdgEIfMFLzelhc8v7ZKMcC9G', 'Alice Student',  'STUDENT', TRUE),
-    ('bob@kitdesk.test',   '$2b$10$R.m9r6cIa02wkiKcnJSa.OHr6LHRQOdgEIfMFLzelhc8v7ZKMcC9G', 'Bob Student',    'STUDENT', TRUE),
-    -- Carol's subscription has lapsed, for demonstrating the 403.
-    ('carol@kitdesk.test', '$2b$10$R.m9r6cIa02wkiKcnJSa.OHr6LHRQOdgEIfMFLzelhc8v7ZKMcC9G', 'Carol Student',  'STUDENT', FALSE);
-
--- 50 subscribed students for the concurrency race script: student01..student50@kitdesk.test
-INSERT INTO users (email, password_hash, full_name, role, subscription_active)
-SELECT format('student%s@kitdesk.test', lpad(n::text, 2, '0')),
-       '$2b$10$R.m9r6cIa02wkiKcnJSa.OHr6LHRQOdgEIfMFLzelhc8v7ZKMcC9G',
-       format('Race Student %s', n),
-       'STUDENT',
-       TRUE
-FROM generate_series(1, 50) AS n;
