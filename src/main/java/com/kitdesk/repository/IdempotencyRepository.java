@@ -10,6 +10,9 @@ import org.springframework.data.repository.query.Param;
 
 public interface IdempotencyRepository extends JpaRepository<IdempotencyRecord, IdempotencyRecord.Key> {
 
+    /** Name of the primary key on (user_id, idem_key) (V1): a second save of the same key breaks it. */
+    String KEY_CONSTRAINT = "idempotency_keys_pkey";
+
     Optional<IdempotencyRecord> findByUserIdAndKey(Long userId, String key);
 
     /** Forget keys older than the retention window (the contract promises at least 24 hours). */

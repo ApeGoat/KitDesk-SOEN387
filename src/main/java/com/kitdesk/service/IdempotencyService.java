@@ -6,6 +6,7 @@ import com.kitdesk.config.CorrelationIdFilter;
 import com.kitdesk.domain.DomainRuleViolation;
 import com.kitdesk.domain.IdempotencyRecord;
 import com.kitdesk.domain.Role;
+import com.kitdesk.repository.DatabaseConstraints;
 import com.kitdesk.repository.IdempotencyRepository;
 import com.kitdesk.repository.VersionMismatchException;
 import java.time.Clock;
@@ -14,7 +15,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -42,8 +42,6 @@ public class IdempotencyService {
     /** An HTTP result as saved and replayed: status code and JSON body. */
     public record Reply(int status, String body) {
     }
-
-    private static final String KEY_CONSTRAINT = "idempotency_keys_pkey";
 
     private final IdempotencyRepository keys;
     private final TransactionTemplate tx;
@@ -148,15 +146,7 @@ public class IdempotencyService {
     }
 
     private static boolean isKeyClash(Throwable e) {
-        if (!(e instanceof DataIntegrityViolationException)) {
-            return false;
-        }
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t.getMessage() != null && t.getMessage().contains(KEY_CONSTRAINT)) {
-                return true;
-            }
-        }
-        return false;
+        return DatabaseConstraints.isIdempotencyKeyClash(e);
     }
 
     private IdempotencyRecord record(Caller caller, String key, String fingerprint, Reply reply) {
