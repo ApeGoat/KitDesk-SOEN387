@@ -22,7 +22,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Scheduled use cases that no request triggers:
  * <ul>
- *   <li><b>Expiry</b> (daily): RESERVED bookings whose end date has passed become EXPIRED.</li>
+ *   <li><b>Expiry</b> (daily): RESERVED bookings whose end date has passed become EXPIRED,
+ *       each in its own transaction.</li>
  *   <li><b>Late-return failsafe</b> (hourly): a booking starting today or tomorrow whose unit is
  *       still out past its end date is moved to an identical unit free for the whole booking.
  *       If none is free, it stays as it is; the student will be told and offered a switch or a
@@ -63,19 +64,32 @@ public class ReservationJobs {
     @Scheduled(cron = "${kitdesk.jobs.expiry-cron:0 5 0 * * *}", zone = "${kitdesk.timezone:America/Toronto}")
     public int expireUnclaimed() {
         LocalDate today = LocalDate.now(clock);
-        Integer expired = tx.execute(status -> {
-            int count = 0;
-            for (Reservation r : reservations.findUnclaimedPastEnd(today)) {
-                if (r.expireIfUnclaimed(today)) {
-                    count++;
+        List<Long> lapsed = reservations.findUnclaimedPastEnd(today).stream().map(Reservation::getId).toList();
+        int expired = 0;
+        for (Long id : lapsed) {
+            // One transaction per booking: a conflict on one (say, staff touching it at 00:05)
+            // is logged and skipped, and the next run picks it up again.
+            try {
+                if (Boolean.TRUE.equals(tx.execute(status -> expireOne(id, today)))) {
+                    expired++;
                 }
+            } catch (RuntimeException e) {
+                log.warn("Could not expire reservation {} this run: {}", publicIdOf(id), e.toString());
             }
-            return count;
-        });
-        if (expired != null && expired > 0) {
+        }
+        if (expired > 0) {
             log.info("Expired {} unclaimed reservation(s)", expired);
         }
-        return expired == null ? 0 : expired;
+        return expired;
+    }
+
+    private boolean expireOne(Long reservationId, LocalDate today) {
+        Reservation r = reservations.findById(reservationId).orElse(null);
+        if (r == null || !r.expireIfUnclaimed(today)) {
+            return false;   // changed meanwhile
+        }
+        reservations.saveAndFlush(r);
+        return true;
     }
 
     @Scheduled(cron = "${kitdesk.jobs.reassign-cron:0 0 * * * *}", zone = "${kitdesk.timezone:America/Toronto}")
@@ -85,10 +99,14 @@ public class ReservationJobs {
                 .stream().map(Reservation::getId).toList();
         int moved = 0;
         for (Long id : blocked) {
-            // One transaction per booking, so one failure doesn't undo the others.
-            Boolean ok = tx.execute(status -> moveToIdenticalUnit(id, today));
-            if (Boolean.TRUE.equals(ok)) {
-                moved++;
+            // One transaction per booking. A failure (say, the student cancels while it's being
+            // moved) rolls back that booking only; it counts as still blocked and the loop goes on.
+            try {
+                if (Boolean.TRUE.equals(tx.execute(status -> moveToIdenticalUnit(id, today)))) {
+                    moved++;
+                }
+            } catch (RuntimeException e) {
+                log.warn("Could not move reservation {} this run: {}", publicIdOf(id), e.toString());
             }
         }
         return new ReassignmentRun(moved, blocked.size() - moved);
@@ -121,6 +139,14 @@ public class ReservationJobs {
                 r.getPublicId(), original.getAssetTag());
         // TODO(outbox): tell the student, offering a switch to another unit or a wait (UNIT_DELAYED).
         return false;
+    }
+
+    private String publicIdOf(Long id) {
+        try {
+            return reservations.findById(id).map(Reservation::getPublicId).orElse("#" + id);
+        } catch (RuntimeException e) {
+            return "#" + id;
+        }
     }
 
     @Scheduled(cron = "${kitdesk.jobs.key-cleanup-cron:0 30 * * * *}", zone = "${kitdesk.timezone:America/Toronto}")
