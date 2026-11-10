@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Kit Desk API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Booking API for a campus camera and sound equipment desk. All operations
     require a bearer token except login and the health checks.
@@ -9,6 +9,7 @@ info:
     ## Dates and booking rules
     - Dates are whole calendar days in `YYYY-MM-DD` form. `startDate` and
       `endDate` are both inclusive.
+    - "Today" is the current date in the desk's time zone, America/Toronto.
     - A reservation covers at most 10 days. `endDate` must be on or after
       `startDate` and no later than `startDate` + 9 days. For example, the
       longest reservation starting on 2026-11-02 ends on 2026-11-11.
@@ -22,7 +23,30 @@ info:
       read-only `overdue` field and can be filtered with `overdue=true`. A
       student with any overdue reservation cannot book or pick up gear.
     - A `RESERVED` reservation that has not been picked up on its `startDate`
-      remains valid until it is picked up or the `endDate` passes.
+      remains valid until it is picked up or the `endDate` passes. The day
+      after `endDate` it becomes `EXPIRED`, and from then on it can be
+      neither picked up nor cancelled.
+    - A unit is **occupied** on the days of its active reservations. A
+      `PICKED_UP` unit stays occupied until it is returned, even past its
+      `endDate`: an overdue unit can't be booked from today, picked up by
+      the next student, or used as a replacement. A unit taken out of
+      service (`Unit.inService` false) can't be booked at all.
+    - **Pickup.** Every pickup needs the unit to be back at the desk (no
+      other reservation of it still `PICKED_UP`). A reservation can be
+      picked up from its `startDate` to its `endDate`. It can also be picked
+      up **early**, before `startDate`, if no other active reservation of
+      the unit falls between today and `startDate`. An early pickup moves
+      `startDate` to today. If that would make it longer than 10 days,
+      `endDate` moves back to today + 9. The added days count against the
+      category's `rentalLimit` like a new booking. Example: a booking for
+      2026-11-05 to 2026-11-14 picked up on 2026-11-02 becomes 2026-11-02 to
+      2026-11-11.
+    - **Late return.** If a unit is still out past its `endDate` and the next
+      reservation of it starts today or tomorrow, the service moves that
+      reservation to another in-service unit of the same model that is free
+      for all of its dates. The dates stay the same; `unitId` and `assetTag`
+      change and `version` increases. If no such unit is free, the
+      reservation is left as it is.
 
     ## Identifiers
     Every identifier is an opaque, prefixed string (`cat_`, `mdl_`, `unt_`,
@@ -33,6 +57,8 @@ info:
     ## Strictness policy
     - Request bodies are closed (`additionalProperties: false`). An unknown
       field is rejected with 400 `INVALID_REQUEST`, not silently ignored.
+    - Optional response fields are omitted when they don't apply. They are
+      never sent as `null`.
     - Response bodies are open. New fields may be added to any response
       object in a minor version, and clients must ignore fields they do not
       recognize.
@@ -51,6 +77,13 @@ info:
     - A client that receives a `code` it does not recognize must treat it as
       not retryable and show the code and `correlationId` to the user. This
       is what allows new codes to be added in a minor version.
+    - Every response carries an `X-Correlation-Id` header with the same
+      value as the error body's `correlationId`. A client may send its own
+      `X-Correlation-Id`; it is reused if it is a UUID and replaced
+      otherwise.
+    - The one exception: a request whose `Accept` header rules out
+      `application/json` gets 406 with no body, since the error itself
+      would be JSON.
 
     ## Idempotency
     Every operation that changes reservation state (create, cancel, pickup,
@@ -61,7 +94,8 @@ info:
       compared as parsed JSON (field order and whitespace are ignored).
     - **Replay.** Repeating the same request with the same key returns the
       saved result, status code and body included. Saved errors replay too:
-      a request that first got 409 gets the same 409 again.
+      a request that first got 409 gets the same 409 again, with the first
+      attempt's `correlationId`.
     - **What is saved.** Every 2xx and 4xx result produced after the key is
       accepted. 5xx results are not saved, so a retry after a 5xx runs the
       operation again.
@@ -144,6 +178,8 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
           description: "`INVALID_CREDENTIALS`: the email or password is incorrect. Not retryable."
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "5XX":
           $ref: "#/components/responses/ServerError"
 
@@ -205,8 +241,9 @@ paths:
       description: |
         Returns the physical units belonging to a model and, for each unit,
         the date ranges it is occupied. Only `RESERVED` and `PICKED_UP`
-        reservations occupy a unit, so only those are listed. Availability
-        date filters are intentionally not included in version 1.0.0; they
+        reservations occupy a unit, so only those are listed. Out-of-service
+        units are listed too, marked `inService: false`. Availability
+        date filters are intentionally not included yet; they
         are planned as an optional, additive parameter in a later minor
         version. Safe: calling this changes nothing.
       operationId: listModelUnits
@@ -282,7 +319,9 @@ paths:
         may book. The student is taken from the login token and must not be
         supplied by the client.
 
-        The unit must be free on every day of the inclusive date range. The
+        The unit must be in service and free on every day of the inclusive
+        date range (an overdue unit is not free; see "Dates and booking
+        rules"). The
         student's subscription must be active, the student must have no
         overdue gear, and the booking must not take the student past the
         category's `rentalLimit` of active rentals on any day of the range.
@@ -329,13 +368,15 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
           description: |
-            `UNIT_UNAVAILABLE`: the unit is already occupied on at least one
-            requested day. `CATEGORY_LIMIT_REACHED`: on at least one requested
+            `UNIT_UNAVAILABLE`: the unit is out of service, or already occupied
+            on at least one requested day. `CATEGORY_LIMIT_REACHED`: on at least one requested
             day, the student already holds the maximum number of active rentals
             in this category. Neither is retryable.
         "422":
           $ref: "#/components/responses/IdempotencyError"
           description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "5XX":
           $ref: "#/components/responses/ServerError"
 
@@ -373,9 +414,11 @@ paths:
       tags: [Reservations]
       summary: Cancel a reservation
       description: |
-        Cancels a `RESERVED` reservation owned by the calling student, before
-        pickup. A reservation that has been picked up, returned, cancelled or
-        expired cannot be cancelled.
+        Cancels a `RESERVED` reservation before pickup, no later than its
+        `endDate`. A student may cancel only their own reservations; staff
+        may cancel any student's (for example, when the unit is broken). A
+        reservation that has been picked up, returned, cancelled or expired
+        cannot be cancelled.
 
         NOT safe and not naturally idempotent: a second cancel would fail on
         state or version. The `Idempotency-Key` makes retries safe, and the
@@ -403,7 +446,8 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
           description: |
-            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`.
+            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`, or
+            its `endDate` has passed.
             `RESERVATION_VERSION_MISMATCH`: the stored version differs from
             `If-Match-Version`; re-read the reservation. Neither is retryable.
         "422":
@@ -420,8 +464,12 @@ paths:
       summary: Record a reservation pickup
       description: |
         Staff-only. Records that the reserved unit has been handed to the
-        student. The reservation must be `RESERVED`, its version must match
-        `If-Match-Version`, and the student must have no overdue gear.
+        student. The reservation must be `RESERVED` and not past its
+        `endDate`, its version must match `If-Match-Version`, the student
+        must have no overdue gear, and the unit must be back at the desk.
+        Picking up before `startDate` is an early pickup: see "Dates and
+        booking rules" for when it is allowed and how it changes the dates.
+        The response carries the new dates.
 
         NOT safe and not naturally idempotent: a repeated pickup would fail
         on state or version. The `Idempotency-Key` lets the desk app retry
@@ -453,9 +501,15 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
           description: |
-            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`.
+            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`, or
+            its `endDate` has passed.
+            `UNIT_UNAVAILABLE`: the unit has not been returned by its last
+            holder, or (early pickup) another reservation of the unit falls
+            before `startDate`.
+            `CATEGORY_LIMIT_REACHED`: (early pickup) the added days would
+            take the student past the category's `rentalLimit`.
             `RESERVATION_VERSION_MISMATCH`: the stored version differs from
-            `If-Match-Version`; re-read the reservation. Neither is retryable.
+            `If-Match-Version`; re-read the reservation. None are retryable.
         "422":
           $ref: "#/components/responses/IdempotencyError"
           description: "`IDEMPOTENCY_KEY_REQUIRED` or `IDEMPOTENCY_KEY_REUSED`. Not retryable."
@@ -691,8 +745,9 @@ components:
       enum: [RESERVED, PICKED_UP, RETURNED, CANCELLED, EXPIRED]
       description: |
         `RESERVED` and `PICKED_UP` are active. A `RESERVED` reservation not
-        picked up by the end of its `endDate` becomes `EXPIRED`. Overdue is
-        not a status; see `Reservation.overdue`.
+        picked up by the end of its `endDate` becomes `EXPIRED` (a daily job
+        runs shortly after midnight, Toronto time). Overdue is not a status;
+        see `Reservation.overdue`.
 
     NotificationStatus:
       type: string
@@ -706,6 +761,7 @@ components:
         email:
           type: string
           format: email
+          description: Matched ignoring upper and lower case.
           examples: [student@university.ca]
         password:
           type: string
@@ -806,6 +862,12 @@ components:
           type: string
           readOnly: true
           examples: [mdl_7c2e]
+        inService:
+          type: boolean
+          readOnly: true
+          description: |
+            False when the unit has been taken out of service. It is still
+            listed, but booking it is refused.
         reservations:
           type: array
           description: |
@@ -836,6 +898,21 @@ components:
         status:
           type: string
           enum: [RESERVED, PICKED_UP]
+        occupiedUntil:
+          type: string
+          format: date
+          readOnly: true
+          description: |
+            Last day the unit is busy because of this reservation. This is
+            `endDate`, except for gear that is `PICKED_UP` and past its end
+            date: it stays busy until it is returned, so this is today.
+        notReturned:
+          type: boolean
+          readOnly: true
+          description: |
+            True when the reservation is `PICKED_UP`, its `endDate` has
+            passed and the gear is not back yet (`occupiedUntil` is after
+            `endDate`).
 
     NewReservation:
       type: object
@@ -883,7 +960,18 @@ components:
           examples: [res_8f3a]
         unitId:
           type: string
+          description: |
+            The reserved unit. It can change if the service moves the
+            reservation to an identical unit after a late return (see "Dates
+            and booking rules").
           examples: [unt_2m8x]
+        assetTag:
+          type: string
+          readOnly: true
+          description: |
+            Label printed on the reserved unit (`Unit.assetTag`), so staff
+            and students can find the physical item. For display only.
+          examples: [CAM-R5-03]
         modelId:
           type: string
           readOnly: true
@@ -917,6 +1005,22 @@ components:
           type: string
           format: date-time
           readOnly: true
+        student:
+          type: object
+          readOnly: true
+          description: |
+            Who holds the reservation. Included only when the caller is
+            staff (for example, to contact a student about overdue gear).
+            Students never receive it.
+          required: [name, email]
+          properties:
+            name:
+              type: string
+              examples: [Bob Student]
+            email:
+              type: string
+              format: email
+              examples: [bob@kitdesk.test]
 
     ReservationList:
       type: object
@@ -1076,6 +1180,13 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    UnsupportedMediaType:
+      description: "`UNSUPPORTED_MEDIA_TYPE`: the body was not sent as `application/json`. Not retryable."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     ServerError:
       description: |
         `INTERNAL_ERROR` (500) or `SERVICE_UNAVAILABLE` (503): the server
@@ -1137,7 +1248,7 @@ components:
       retryable: false
     - code: NOT_FOUND
       status: 404
-      when: The model, unit, reservation or notification does not exist, or the reservation belongs to another student.
+      when: The model, unit, reservation or notification does not exist, the reservation belongs to another student, or (for a logged-in caller) the path does not exist.
       operations:
         [
           listModelUnits,
@@ -1149,19 +1260,29 @@ components:
           retryNotification,
         ]
       retryable: false
+    - code: METHOD_NOT_ALLOWED
+      status: 405
+      when: The path exists but does not support the HTTP method used. The Allow header lists the methods it does support.
+      operations: [all]
+      retryable: false
+    - code: UNSUPPORTED_MEDIA_TYPE
+      status: 415
+      when: A request body was sent with a Content-Type other than application/json.
+      operations: [login, createReservation]
+      retryable: false
     - code: UNIT_UNAVAILABLE
       status: 409
-      when: The unit is already occupied on at least one requested day.
-      operations: [createReservation]
+      when: The unit is out of service or already occupied on at least one requested day (an overdue unit stays occupied until it is returned), or, for a pickup, the unit is not back at the desk or (early pickup) another reservation of it falls before startDate.
+      operations: [createReservation, pickupReservation]
       retryable: false
     - code: CATEGORY_LIMIT_REACHED
       status: 409
-      when: On at least one requested day, the student already holds the category's rentalLimit of active rentals in that category (rentals whose dates overlap the request; a PICKED_UP rental counts until it is returned).
-      operations: [createReservation]
+      when: On at least one requested day, the student already holds the category's rentalLimit of active rentals in that category (rentals whose dates overlap the request; a PICKED_UP rental counts until it is returned). Also checked for the days an early pickup adds.
+      operations: [createReservation, pickupReservation]
       retryable: false
     - code: INVALID_RESERVATION_STATE
       status: 409
-      when: The reservation is not in the status the operation requires (RESERVED for cancel and pickup, PICKED_UP for return).
+      when: The reservation is not in the status the operation requires (RESERVED for cancel and pickup, PICKED_UP for return), or its endDate has passed (cancel and pickup).
       operations: [cancelReservation, pickupReservation, returnReservation]
       retryable: false
     - code: RESERVATION_VERSION_MISMATCH

@@ -4,10 +4,14 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.IdClass;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.Objects;
+import org.springframework.data.domain.Persistable;
 
 /**
  * The saved result of a request sent with an Idempotency-Key, scoped to the user who sent it.
@@ -16,7 +20,7 @@ import java.util.Objects;
 @Entity
 @Table(name = "idempotency_keys")
 @IdClass(IdempotencyRecord.Key.class)
-public class IdempotencyRecord {
+public class IdempotencyRecord implements Persistable<IdempotencyRecord.Key> {
 
     @Id
     @Column(name = "user_id")
@@ -39,6 +43,15 @@ public class IdempotencyRecord {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /**
+     * A new record is always INSERTed, never merged into an existing row. If another request
+     * already saved the same (user, key), the insert fails on the primary key instead of quietly
+     * overwriting that request's saved result. This is what makes two requests sent at once with
+     * the same key safe.
+     */
+    @Transient
+    private boolean isNew = true;
+
     protected IdempotencyRecord() {
         // for JPA
     }
@@ -56,6 +69,22 @@ public class IdempotencyRecord {
     /** Same key and same request? (If not, the contract says 422 IDEMPOTENCY_KEY_REUSED.) */
     public boolean matches(String otherRequestHash) {
         return requestHash.equals(otherRequestHash);
+    }
+
+    @Override
+    public Key getId() {
+        return new Key(userId, key);
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markStored() {
+        isNew = false;
     }
 
     public Long getUserId() { return userId; }

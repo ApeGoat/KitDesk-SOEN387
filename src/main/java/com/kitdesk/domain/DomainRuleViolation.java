@@ -1,8 +1,12 @@
 package com.kitdesk.domain;
 
 /**
- * Thrown by an entity when a request would break one of its own rules. {@code code} is the
- * contract's error code (e.g. UNIT_UNAVAILABLE); the interface layer maps it to an HTTP status.
+ * Thrown when a request would break a rule. {@code code} is the contract's error code (e.g.
+ * UNIT_UNAVAILABLE); the interface layer maps it to an HTTP status (see the service layer's
+ * {@code ErrorCatalog}). Entities throw it for their own rules (including the per-day category
+ * count in {@code Reservation.checkCategoryLimit}, fed by the service); the service layer throws
+ * it for the other rules that look across many records (subscription, overdue gear) and for
+ * access checks.
  */
 public class DomainRuleViolation extends RuntimeException {
 

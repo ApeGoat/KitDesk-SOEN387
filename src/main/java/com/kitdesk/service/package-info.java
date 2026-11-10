@@ -1,8 +1,13 @@
 /**
- * Service (domain logic) layer: every business rule lives here.
+ * Service layer (§5.6): the use cases and the rules that span many records.
  *
- * <p>Booking limits, date rules, subscription and overdue checks, per-user authorization and
- * transaction boundaries (including row locks) are all enforced in this package, so any new
- * path into the system (a new endpoint, a scheduled job) gets them automatically.
+ * <p>Each use case opens its own transaction and decides the lock order (student, then unit).
+ * Subscription, overdue lock-out, per-user access (own bookings only, staff-only pickup and
+ * return) and idempotency keys are enforced here, so any new way into the system (another
+ * endpoint, a scheduled job) gets them too. For the category limit, the service loads the
+ * student's overlapping rentals under the student lock and the domain helper
+ * {@code Reservation.checkCategoryLimit} does the per-day count. Rules about one reservation's own
+ * data live on the domain entities, and the locks and version checks themselves live in the
+ * repository layer.
  */
 package com.kitdesk.service;

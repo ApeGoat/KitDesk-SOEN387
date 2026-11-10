@@ -210,7 +210,7 @@ class RepositoryQueriesTest {
     @Test
     void findAtVersionRefusesAStaleVersion() {
         Reservation r = book(user("alice@kitdesk.test"), unit("CAM-R5-01"), 0, 2);
-        r.cancel(NOW);
+        r.cancel(DAY0, NOW);
         reservations.saveAndFlush(r); // now at version 1
         flushAndClear();
 
@@ -230,7 +230,7 @@ class RepositoryQueriesTest {
         Unit cam = unit("CAM-R5-01");
         Reservation live = book(alice, cam, 0, 1);
         Reservation cancelled = book(alice, cam, 2, 3);
-        cancelled.cancel(NOW);
+        cancelled.cancel(DAY0, NOW);
         Reservation later = book(alice, cam, 4, 5);
         flushAndClear();
 
@@ -247,7 +247,7 @@ class RepositoryQueriesTest {
         Reservation picked = book(alice, unit("LEN-50-02"), 0, 1);
         picked.pickUp(DAY0, NOW, List.of(), List.of());                  // lens, picked up: found
         Reservation gone = book(alice, unit("LEN-50-03"), 0, 1);
-        gone.cancel(NOW);                                                // cancelled: not found
+        gone.cancel(DAY0, NOW);                                                // cancelled: not found
         book(alice, unit("LEN-2470-01"), 5, 6);                          // lens, other days: not found
         book(alice, unit("CAM-R5-01"), 0, 1);                            // other category: not found
         book(bob, unit("LEN-2470-02"), 0, 1);                            // other student: not found

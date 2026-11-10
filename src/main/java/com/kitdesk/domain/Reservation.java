@@ -110,6 +110,17 @@ public class Reservation {
                                      LocalDate today, Instant now) {
         Objects.requireNonNull(student, "student");
         Objects.requireNonNull(unit, "unit");
+        checkWindow(startDate, endDate, today);
+        return new Reservation(student, unit, startDate, endDate, now);
+    }
+
+    /**
+     * The date-window rule on its own, so the service can refuse bad dates (400) before it takes
+     * any locks or checks eligibility. {@link #create} applies the same check.
+     *
+     * @throws DomainRuleViolation INVALID_REQUEST for a bad window
+     */
+    public static void checkWindow(LocalDate startDate, LocalDate endDate, LocalDate today) {
         if (startDate == null || endDate == null) {
             throw invalid("startDate and endDate are required.");
         }
@@ -123,12 +134,18 @@ public class Reservation {
         if (startDate.isBefore(today)) {
             throw invalid("startDate must not be before today (" + today + ").");
         }
-        return new Reservation(student, unit, startDate, endDate, now);
     }
 
-    /** Student cancels before pickup. Only a RESERVED reservation can be cancelled. */
-    public void cancel(Instant now) {
+    /**
+     * Student cancels before pickup. Only a RESERVED reservation, and not after its endDate (by
+     * then the booking has lapsed and is about to become EXPIRED), the same cut-off as pickup.
+     */
+    public void cancel(LocalDate today, Instant now) {
         requireStatus(ReservationStatus.RESERVED, "cancelled");
+        if (today.isAfter(endDate)) {
+            throw new DomainRuleViolation(DomainRuleViolation.INVALID_RESERVATION_STATE,
+                    "This reservation ended on " + endDate + " and has lapsed, so it can't be cancelled.");
+        }
         status = ReservationStatus.CANCELLED;
         cancelledAt = now;
     }
