@@ -51,6 +51,9 @@ info:
     - A client that receives a `code` it does not recognize must treat it as
       not retryable and show the code and `correlationId` to the user. This
       is what allows new codes to be added in a minor version.
+    - The one exception: a request whose `Accept` header rules out
+      `application/json` gets 406 with no body, since the error itself
+      would be JSON.
 
     ## Idempotency
     Every operation that changes reservation state (create, cancel, pickup,
@@ -1181,7 +1184,7 @@ components:
       retryable: false
     - code: NOT_FOUND
       status: 404
-      when: The model, unit, reservation or notification does not exist, or the reservation belongs to another student.
+      when: The model, unit, reservation or notification does not exist, the reservation belongs to another student, or (for a logged-in caller) the path does not exist.
       operations:
         [
           listModelUnits,
@@ -1192,6 +1195,16 @@ components:
           returnReservation,
           retryNotification,
         ]
+      retryable: false
+    - code: METHOD_NOT_ALLOWED
+      status: 405
+      when: The path exists but does not support the HTTP method used. The Allow header lists the methods it does support.
+      operations: [all]
+      retryable: false
+    - code: UNSUPPORTED_MEDIA_TYPE
+      status: 415
+      when: A request body was sent with a Content-Type other than application/json.
+      operations: [login, createReservation]
       retryable: false
     - code: UNIT_UNAVAILABLE
       status: 409

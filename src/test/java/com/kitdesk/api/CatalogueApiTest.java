@@ -3,6 +3,7 @@ package com.kitdesk.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.kitdesk.service.ErrorCatalog;
 import com.kitdesk.support.ApiTestBase;
 import java.util.ArrayList;
 import java.util.List;
@@ -83,6 +84,37 @@ class CatalogueApiTest extends ApiTestBase {
         JsonNode units = get("/models/" + r5 + "/units", token).body().path("units");
         assertThat(field(units, "assetTag")).containsExactly("CAM-R5-01", "CAM-R5-02", "CAM-R5-03");
         assertThat(field(units, "inService")).containsExactly("true", "true", "false");
+    }
+
+    @Test
+    void aWrongMethodIs405WithACatalogueCodeAndTheAllowHeader() {
+        Resp r = send("DELETE", "/categories", token("alice@kitdesk.test"), null);
+        assertThat(r.status()).isEqualTo(405);
+        assertThat(r.code()).isEqualTo("METHOD_NOT_ALLOWED");
+        assertThat(ErrorCatalog.statusOf(r.code())).isEqualTo(405);
+        assertThat(r.raw().headers().firstValue("Allow")).hasValueSatisfying(v -> assertThat(v).contains("GET"));
+    }
+
+    @Test
+    void anUnknownPathIs404AndTheMessageDoesntEchoIt() {
+        Resp r = get("/health/../no-such-thing", token("alice@kitdesk.test"));
+        assertThat(r.status()).isEqualTo(404);
+        assertThat(r.code()).isEqualTo("NOT_FOUND");
+        assertThat(r.text("message")).doesNotContain("no-such-thing").doesNotContain("static resource");
+    }
+
+    @Test
+    void aBodyThatIsntJsonIs415() {
+        Resp r = send("POST", "/auth/login", null, "email=a&password=b", "Content-Type", "text/plain");
+        assertThat(r.status()).isEqualTo(415);
+        assertThat(r.code()).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+    }
+
+    @Test
+    void aResponseFormatOtherThanJsonIs406() {
+        Resp r = send("GET", "/categories", token("alice@kitdesk.test"), null, "Accept", "text/csv");
+        assertThat(r.status()).isEqualTo(406);
+        assertThat(r.raw().body()).isEmpty();   // the client won't take JSON, so there's no error body
     }
 
     @Test

@@ -68,7 +68,11 @@ public abstract class ApiTestBase {
                 .timeout(Duration.ofSeconds(60))
                 .method(method, body == null ? HttpRequest.BodyPublishers.noBody()
                         : HttpRequest.BodyPublishers.ofString(body));
-        if (body != null) {
+        boolean ownContentType = false;
+        for (int i = 0; i < headers.length; i += 2) {
+            ownContentType |= headers[i].equalsIgnoreCase("Content-Type");
+        }
+        if (body != null && !ownContentType) {
             b.header("Content-Type", "application/json");
         }
         if (token != null) {

@@ -6,7 +6,6 @@ import com.kitdesk.service.ErrorCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -70,31 +69,55 @@ public class GlobalExceptionHandler {
         return badRequest("Parameter '" + e.getName() + "' has an invalid value.");
     }
 
+    /**
+     * Spring's own request errors (unknown URL, wrong method, missing header, ...) and anything
+     * unexpected. Every response uses a code from the catalogue and a fixed message of ours:
+     * Spring's detail text can echo the request (the path, a header), so it isn't passed on.
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> unexpected(Exception e) {
-        // Spring's own request errors (unknown URL, wrong method, missing header, ...) carry their
-        // proper status. Without this they'd fall through to the 500 below.
         if (e instanceof ErrorResponse springError) {
-            HttpStatusCode status = springError.getStatusCode();
-            String code = switch (status.value()) {
-                case 400 -> "INVALID_REQUEST";
-                case 404 -> "NOT_FOUND";
-                default -> {
-                    HttpStatus known = HttpStatus.resolve(status.value());
-                    yield known != null ? known.name() : "REQUEST_FAILED";
+            int status = springError.getStatusCode().value();
+            ResponseEntity.BodyBuilder reply;
+            ApiError body;
+            switch (status) {
+                case 404 -> {
+                    reply = ResponseEntity.status(404);
+                    body = ApiError.of(ErrorCatalog.NOT_FOUND, "There is nothing at this address.");
                 }
-            };
-            String message = springError.getBody().getDetail() != null
-                    ? springError.getBody().getDetail()
-                    : "Request could not be handled.";
-            return ResponseEntity.status(status).body(ApiError.of(code, message));
+                case 405 -> {
+                    reply = ResponseEntity.status(405).headers(springError.getHeaders());   // keeps Allow
+                    body = ApiError.of(ErrorCatalog.METHOD_NOT_ALLOWED, "This address doesn't support that method.");
+                }
+                case 406 -> {
+                    // The client said it won't accept JSON, so no error body can be sent (it would
+                    // be JSON too): status only, and no catalogue code.
+                    return ResponseEntity.status(406).build();
+                }
+                case 415 -> {
+                    reply = ResponseEntity.status(415).headers(springError.getHeaders());   // keeps Accept
+                    body = ApiError.of(ErrorCatalog.UNSUPPORTED_MEDIA_TYPE, "Send the request body as application/json.");
+                }
+                default -> {
+                    if (status >= 500) {
+                        log.error("Request failed inside Spring", e);
+                        reply = ResponseEntity.status(500);
+                        body = ApiError.of(ErrorCatalog.INTERNAL_ERROR, "Something went wrong on our side.");
+                    } else {
+                        // Any other request error (a missing header or parameter, ...) is a 400.
+                        reply = ResponseEntity.status(400);
+                        body = ApiError.of(ErrorCatalog.INVALID_REQUEST, "The request is missing something or has an invalid part.");
+                    }
+                }
+            }
+            return reply.body(body);
         }
         log.error("Unhandled error", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiError.of("INTERNAL_ERROR", "Something went wrong on our side."));
+                .body(ApiError.of(ErrorCatalog.INTERNAL_ERROR, "Something went wrong on our side."));
     }
 
     private static ResponseEntity<ApiError> badRequest(String message) {
-        return ResponseEntity.badRequest().body(ApiError.of("INVALID_REQUEST", message));
+        return ResponseEntity.badRequest().body(ApiError.of(ErrorCatalog.INVALID_REQUEST, message));
     }
 }

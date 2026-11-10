@@ -17,6 +17,8 @@ public final class ErrorCatalog {
     public static final String SUBSCRIPTION_INACTIVE = "SUBSCRIPTION_INACTIVE";
     public static final String OVERDUE_GEAR = "OVERDUE_GEAR";
     public static final String NOT_FOUND = "NOT_FOUND";
+    public static final String METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED";
+    public static final String UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE";
     public static final String UNIT_UNAVAILABLE = "UNIT_UNAVAILABLE";
     public static final String CATEGORY_LIMIT_REACHED = "CATEGORY_LIMIT_REACHED";
     public static final String INVALID_RESERVATION_STATE = "INVALID_RESERVATION_STATE";
@@ -35,6 +37,8 @@ public final class ErrorCatalog {
             Map.entry(SUBSCRIPTION_INACTIVE, 403),
             Map.entry(OVERDUE_GEAR, 403),
             Map.entry(NOT_FOUND, 404),
+            Map.entry(METHOD_NOT_ALLOWED, 405),
+            Map.entry(UNSUPPORTED_MEDIA_TYPE, 415),
             Map.entry(UNIT_UNAVAILABLE, 409),
             Map.entry(CATEGORY_LIMIT_REACHED, 409),
             Map.entry(INVALID_RESERVATION_STATE, 409),
