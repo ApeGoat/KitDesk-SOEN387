@@ -82,7 +82,9 @@ public abstract class ApiTestBase {
             b.header(headers[i], headers[i + 1]);
         }
         try {
-            HttpResponse<String> r = CLIENT.send(b.build(), HttpResponse.BodyHandlers.ofString());
+            HttpRequest request = b.build();
+            HttpResponse<String> r = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            Conformance.check(method, path, request, body, r);
             boolean isJson = r.headers().firstValue("Content-Type").orElse("").contains("json");
             JsonNode json = !isJson || r.body() == null || r.body().isBlank() ? null : JSON.readTree(r.body());
             return new Resp(r.statusCode(), json, r);

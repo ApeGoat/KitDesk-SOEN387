@@ -456,8 +456,22 @@ class RepositoryConcurrencyTest {
         List<Outcome<String>> outcomes = Concurrently.run(tasks);
 
         assertThat(count(outcomes, true)).isEqualTo(1);
+        // Here one side UPDATEs (the pickup moves its start date) while the other INSERTs. Each
+        // one's constraint check can end up waiting on the other's uncommitted row, and then
+        // PostgreSQL breaks the tie by aborting one of them as a deadlock instead of reporting
+        // the overlap. Either way the database refused the second booking, which is the point.
         assertThat(outcomes).filteredOn(o -> !o.succeeded()).singleElement()
-                .satisfies(o -> assertThat(DatabaseConstraints.isReservationOverlap(o.error())).isTrue());
+                .satisfies(o -> assertThat(DatabaseConstraints.isReservationOverlap(o.error())
+                        || isDeadlock(o.error())).isTrue());
+    }
+
+    static boolean isDeadlock(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLException sql && "40P01".equals(sql.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---------------------------------------------------------------------------------------
