@@ -73,7 +73,7 @@ Start only the database with `docker compose up -d db`, then run `JWT_SECRET=<32
 ./mvnw test
 ```
 
-Tests start their own throwaway PostgreSQL 16 container, so Docker must be running. They include HTTP tests of every endpoint and the race tests: 50 students booking one unit at once (exactly one wins), and one student sending 5 lens bookings at once (gets 2). Both run once with the app's locks and once with the locks swapped out inside the test, to show what the database still guarantees on its own.
+Tests start their own throwaway PostgreSQL 16 container, so Docker must be running. They include HTTP tests of every endpoint and the race tests: 50 students booking one unit at once (exactly one wins), and one student sending 5 lens bookings at once (gets 2). Both run once with the app's locks and once with the locks swapped out inside the test, to show what the database still guarantees on its own. Every HTTP test also checks its responses (and any request the service accepted) against `openapi.yaml`, so the suite doubles as the contract conformance check.
 
 ## Configuration
 
