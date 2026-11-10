@@ -293,7 +293,15 @@ class ReservationApiTest extends ApiTestBase {
         void someoneElsesBookingIs404() {
             String id = book(BOB, "CAM-R5-01", 1, 2).text("id");
             assertThat(change(ALICE, id, "cancel", 0).status()).isEqualTo(404);
-            assertThat(change(STAFF, id, "cancel", 0).status()).isEqualTo(404);
+            assertThat(get("/reservations/" + id, token(BOB)).text("status")).isEqualTo("RESERVED");
+        }
+
+        @Test
+        void staffCantCancelAndGet403() {
+            String id = book(BOB, "CAM-R5-01", 1, 2).text("id");
+            Resp r = change(STAFF, id, "cancel", 0);
+            assertThat(r.status()).isEqualTo(403);
+            assertThat(r.code()).isEqualTo("FORBIDDEN");
             assertThat(get("/reservations/" + id, token(BOB)).text("status")).isEqualTo("RESERVED");
         }
     }

@@ -381,8 +381,9 @@ paths:
       summary: Cancel a reservation
       description: |
         Cancels a `RESERVED` reservation owned by the calling student, before
-        pickup. A reservation that has been picked up, returned, cancelled or
-        expired cannot be cancelled.
+        pickup and no later than its `endDate`. A reservation that has been
+        picked up, returned, cancelled or expired cannot be cancelled.
+        Students only: staff get 403 `FORBIDDEN`.
 
         NOT safe and not naturally idempotent: a second cancel would fail on
         state or version. The `Idempotency-Key` makes retries safe, and the
@@ -404,13 +405,17 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+          description: "`FORBIDDEN`: the caller is staff. Only students cancel. Not retryable."
         "404":
           $ref: "#/components/responses/NotFound"
           description: "`NOT_FOUND`: no reservation has this id, or it belongs to another student."
         "409":
           $ref: "#/components/responses/Conflict"
           description: |
-            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`.
+            `INVALID_RESERVATION_STATE`: the reservation is not `RESERVED`, or
+            its `endDate` has passed.
             `RESERVATION_VERSION_MISMATCH`: the stored version differs from
             `If-Match-Version`; re-read the reservation. Neither is retryable.
         "422":
@@ -1173,10 +1178,11 @@ components:
       note: After logging in again, the same request may be resent with the same key.
     - code: FORBIDDEN
       status: 403
-      when: The caller's role does not allow the operation (a student calling a staff-only operation, or staff creating a reservation).
+      when: The caller's role does not allow the operation (a student calling a staff-only operation, or staff creating or cancelling a reservation).
       operations:
         [
           createReservation,
+          cancelReservation,
           pickupReservation,
           returnReservation,
           listNotifications,

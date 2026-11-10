@@ -83,7 +83,7 @@ public class ReservationController {
                                          @RequestHeader(name = KEY_HEADER, required = false) String key,
                                          @RequestHeader(name = VERSION_HEADER, required = false) String version,
                                          @RequestBody(required = false) String body) {
-        return idempotent(caller, null, request, key, version, body, 200,
+        return idempotent(caller, Role.STUDENT, request, key, version, body, 200,
                 () -> reservations.cancel(caller, reservationId, readVersion(version)));
     }
 

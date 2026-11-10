@@ -128,6 +128,7 @@ public class ReservationService {
     /** The student cancels their own RESERVED booking. Staff don't cancel (the contract has no such case). */
     @Transactional
     public ReservationView cancel(Caller caller, String reservationId, Integer expectedVersion) {
+        Access.require(caller, Role.STUDENT);   // cancelling is the student's own call; staff get 403
         int version = requireVersion(expectedVersion);
         Reservation reservation = findOwnedBy(caller, reservationId);
         reservations.findByPublicIdAtVersion(reservationId, version);
