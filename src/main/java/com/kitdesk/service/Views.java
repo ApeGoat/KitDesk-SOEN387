@@ -59,15 +59,26 @@ public final class Views {
         }
     }
 
-    public record ReservationView(String id, String unitId, String modelId, String modelName,
+    /** Who holds a reservation. Only ever shown to staff. */
+    public record StudentView(String name, String email) {
+    }
+
+    /**
+     * A reservation. {@code student} is null (left out of the JSON) unless the service decided
+     * the caller may see it, which today means staff.
+     */
+    public record ReservationView(String id, String unitId, String assetTag, String modelId, String modelName,
                                   CategoryCode category, LocalDate startDate, LocalDate endDate,
                                   ReservationStatus status, boolean overdue, long version,
-                                  Instant createdAt) {
-        static ReservationView of(Reservation r, LocalDate today) {
+                                  Instant createdAt, StudentView student) {
+        static ReservationView of(Reservation r, LocalDate today, boolean includeStudent) {
             EquipmentModel m = r.getUnit().getModel();
-            return new ReservationView(r.getPublicId(), r.getUnit().getPublicId(), m.getPublicId(),
-                    m.getDisplayName(), m.getCategory().getCode(), r.getStartDate(), r.getEndDate(),
-                    r.getStatus(), r.isOverdue(today), r.getVersion(), r.getCreatedAt());
+            StudentView student = includeStudent
+                    ? new StudentView(r.getStudent().getFullName(), r.getStudent().getEmail())
+                    : null;
+            return new ReservationView(r.getPublicId(), r.getUnit().getPublicId(), r.getUnit().getAssetTag(),
+                    m.getPublicId(), m.getDisplayName(), m.getCategory().getCode(), r.getStartDate(),
+                    r.getEndDate(), r.getStatus(), r.isOverdue(today), r.getVersion(), r.getCreatedAt(), student);
         }
     }
 }

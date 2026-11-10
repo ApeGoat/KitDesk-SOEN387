@@ -905,6 +905,13 @@ components:
         unitId:
           type: string
           examples: [unt_2m8x]
+        assetTag:
+          type: string
+          readOnly: true
+          description: |
+            Label printed on the reserved unit (`Unit.assetTag`), so staff
+            and students can find the physical item. For display only.
+          examples: [CAM-R5-03]
         modelId:
           type: string
           readOnly: true
@@ -938,6 +945,22 @@ components:
           type: string
           format: date-time
           readOnly: true
+        student:
+          type: object
+          readOnly: true
+          description: |
+            Who holds the reservation. Included only when the caller is
+            staff (for example, to contact a student about overdue gear).
+            Students never receive it.
+          required: [name, email]
+          properties:
+            name:
+              type: string
+              examples: [Bob Student]
+            email:
+              type: string
+              format: email
+              examples: [bob@kitdesk.test]
 
     ReservationList:
       type: object

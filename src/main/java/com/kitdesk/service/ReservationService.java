@@ -51,24 +51,35 @@ public class ReservationService {
         this.clock = clock;
     }
 
-    /** Students get their own reservations; staff get everyone's. Both can filter. */
+    /**
+     * Students get their own reservations; staff get everyone's. Both can filter. For staff the
+     * database does the narrowing ("overdue only" comes back oldest due date first); the filters
+     * below then only trim what's left (a student's own list is small).
+     */
     @Transactional(readOnly = true)
     public List<ReservationView> list(Caller caller, ReservationStatus status, Boolean overdue) {
         LocalDate today = today();
-        List<Reservation> found = caller.isStaff()
-                ? reservations.findAllNewestFirst()
-                : reservations.findByStudent(users.getReferenceById(caller.userId()));
+        List<Reservation> found;
+        if (!caller.isStaff()) {
+            found = reservations.findByStudent(users.getReferenceById(caller.userId()));
+        } else if (Boolean.TRUE.equals(overdue)) {
+            found = reservations.findOverdue(today);
+        } else if (status != null) {
+            found = reservations.findByStatusNewestFirst(status);
+        } else {
+            found = reservations.findAllNewestFirst();
+        }
         return found.stream()
                 .filter(r -> status == null || r.getStatus() == status)
                 .filter(r -> overdue == null || r.isOverdue(today) == overdue)
-                .map(r -> ReservationView.of(r, today))
+                .map(r -> view(caller, r, today))
                 .toList();
     }
 
     /** A student asking for someone else's reservation gets NOT_FOUND, as if it didn't exist. */
     @Transactional(readOnly = true)
     public ReservationView get(Caller caller, String reservationId) {
-        return ReservationView.of(findVisible(caller, reservationId), today());
+        return view(caller, findVisible(caller, reservationId), today());
     }
 
     /**
@@ -111,7 +122,7 @@ public class ReservationService {
         Reservation reservation = Reservation.create(student, unit, booking.startDate(), booking.endDate(),
                 today, clock.instant());
         save(reservation);
-        return ReservationView.of(reservation, today);
+        return view(caller, reservation, today);
     }
 
     /** The student cancels their own RESERVED booking. Staff don't cancel (the contract has no such case). */
@@ -122,7 +133,7 @@ public class ReservationService {
         reservations.findByPublicIdAtVersion(reservationId, version);
         reservation.cancel(today(), clock.instant());
         save(reservation);
-        return ReservationView.of(reservation, today());
+        return view(caller, reservation, today());
     }
 
     /**
@@ -152,7 +163,7 @@ public class ReservationService {
                 student.getId(), category.getId(), today, reservation.getEndDate(), today);
         reservation.pickUp(today, clock.instant(), reservations.findActiveByUnit(unit), heldInCategory);
         save(reservation);
-        return ReservationView.of(reservation, today);
+        return view(caller, reservation, today);
     }
 
     /** Staff take the unit back, overdue or not. */
@@ -164,7 +175,7 @@ public class ReservationService {
         reservations.findByPublicIdAtVersion(reservationId, version);
         reservation.markReturned(clock.instant());
         save(reservation);
-        return ReservationView.of(reservation, today());
+        return view(caller, reservation, today());
     }
 
     // ---------------------------------------------------------------------------------------
@@ -225,4 +236,8 @@ public class ReservationService {
         return LocalDate.now(clock);
     }
 
+    /** Access rule for the student's details: staff see who holds a booking; students don't need to. */
+    private static ReservationView view(Caller caller, Reservation r, LocalDate today) {
+        return ReservationView.of(r, today, caller.isStaff());
+    }
 }

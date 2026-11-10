@@ -18,7 +18,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
 
     @Query("""
             select r from Reservation r
-            join fetch r.unit u join fetch u.model m join fetch m.category
+            join fetch r.unit u join fetch u.model m join fetch m.category join fetch r.student
             where r.publicId = :publicId""")
     Optional<Reservation> findByPublicId(@Param("publicId") String publicId);
 
@@ -48,9 +48,17 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
 
     @Query("""
             select r from Reservation r
-            join fetch r.unit u join fetch u.model m join fetch m.category
+            join fetch r.unit u join fetch u.model m join fetch m.category join fetch r.student
             order by r.createdAt desc""")
     List<Reservation> findAllNewestFirst();
+
+    /** Every reservation in one status, newest first: the staff list filtered by status. */
+    @Query("""
+            select r from Reservation r
+            join fetch r.unit u join fetch u.model m join fetch m.category join fetch r.student
+            where r.status = :status
+            order by r.createdAt desc""")
+    List<Reservation> findByStatusNewestFirst(@Param("status") ReservationStatus status);
 
     /** The unit's active (RESERVED or PICKED_UP) reservations: what occupies its calendar. */
     @Query("""
@@ -85,7 +93,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     /** Overdue rentals (PICKED_UP and past endDate), oldest due date first: the staff "overdue only" list. */
     @Query("""
             select r from Reservation r
-            join fetch r.unit u join fetch u.model m join fetch m.category
+            join fetch r.unit u join fetch u.model m join fetch m.category join fetch r.student
             where r.status = com.kitdesk.domain.ReservationStatus.PICKED_UP and r.endDate < :today
             order by r.endDate""")
     List<Reservation> findOverdue(@Param("today") LocalDate today);

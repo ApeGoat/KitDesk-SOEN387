@@ -2,6 +2,7 @@ package com.kitdesk.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.kitdesk.support.ApiTestBase;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -177,6 +178,50 @@ class ReservationApiTest extends ApiTestBase {
             assertThat(get("/reservations?overdue=false", staff).body().path("reservations")).hasSize(2);
             assertThat(get("/reservations?status=PICKED_UP", staff).body().path("reservations")).hasSize(2);
             assertThat(get("/reservations?status=RESERVED&overdue=false", staff).body().path("reservations")).hasSize(1);
+        }
+
+        @Test
+        void staffOverdueListShowsWhoHasWhatOldestDueFirst() {
+            insertReservation(ALICE, "SND-NTG3-01", TODAY.minusDays(5), TODAY.minusDays(1), "PICKED_UP");
+            insertReservation(BOB, "CAM-R5-03", TODAY.minusDays(8), TODAY.minusDays(4), "PICKED_UP");
+            insertReservation(BOB, "SND-H6-01", TODAY.minusDays(1), TODAY.plusDays(2), "PICKED_UP");   // not late
+
+            JsonNode list = get("/reservations?overdue=true", token(STAFF)).body().path("reservations");
+
+            assertThat(list).hasSize(2);
+            assertThat(list.get(0).path("assetTag").asText()).isEqualTo("CAM-R5-03");   // due longest ago
+            assertThat(list.get(0).path("endDate").asText()).isEqualTo(TODAY.minusDays(4).toString());
+            assertThat(list.get(0).path("student").path("email").asText()).isEqualTo(BOB);
+            assertThat(list.get(0).path("student").path("name").asText()).isEqualTo("Bob Student");
+            assertThat(list.get(1).path("assetTag").asText()).isEqualTo("SND-NTG3-01");
+            assertThat(list.get(1).path("student").path("email").asText()).isEqualTo(ALICE);
+        }
+
+        @Test
+        void studentsSeeTheAssetTagButNotTheStudentBlock() {
+            String alices = book(ALICE, "CAM-R5-01", 1, 2).text("id");
+
+            JsonNode own = get("/reservations", token(ALICE)).body().path("reservations").get(0);
+            assertThat(own.path("assetTag").asText()).isEqualTo("CAM-R5-01");
+            assertThat(own.has("student")).isFalse();
+            assertThat(get("/reservations/" + alices, token(ALICE)).body().has("student")).isFalse();
+            assertThat(get("/reservations/" + alices, token(STAFF)).body().path("student").path("email").asText())
+                    .isEqualTo(ALICE);
+        }
+
+        @Test
+        void staffStatusFilterComesFromTheDatabase() {
+            insertReservation(BOB, "SND-H6-01", TODAY.minusDays(5), TODAY.minusDays(1), "PICKED_UP");
+            String reserved = book(ALICE, "CAM-R5-01", 1, 2).text("id");
+            insertReservation(BOB, "CAM-R5-02", TODAY.plusDays(1), TODAY.plusDays(2), "CANCELLED");
+
+            JsonNode list = get("/reservations?status=RESERVED", token(STAFF)).body().path("reservations");
+            assertThat(list).hasSize(1);
+            assertThat(list.get(0).path("id").asText()).isEqualTo(reserved);
+            assertThat(get("/reservations?status=PICKED_UP&overdue=true", token(STAFF)).body().path("reservations"))
+                    .hasSize(1);
+            assertThat(get("/reservations?status=RESERVED&overdue=true", token(STAFF)).body().path("reservations"))
+                    .isEmpty();
         }
 
         @Test

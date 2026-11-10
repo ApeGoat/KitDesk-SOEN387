@@ -16,6 +16,7 @@ spring:
     # Schema and catalogue only. The demo accounts (db/demo) load only with the "demo" profile.
     locations: classpath:db/migration
   jackson:
+    default-property-inclusion: non_null   # optional response fields are left out, never sent as null
     deserialization:
       fail-on-unknown-properties: true   # request bodies are closed: unknown fields are a 400
 
