@@ -55,7 +55,7 @@ class UnitTest {
     @Test
     void cancelledReturnedAndExpiredBookingsDoNotBlock() {
         Reservation cancelled = existing(0, 3);
-        cancelled.cancel(NOW);
+        cancelled.cancel(TODAY, NOW);
         Reservation returned = existing(0, 3);
         returned.pickUp(TODAY, NOW, List.of(), List.of());
         returned.markReturned(NOW);

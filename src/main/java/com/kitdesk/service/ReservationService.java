@@ -120,7 +120,7 @@ public class ReservationService {
         int version = requireVersion(expectedVersion);
         Reservation reservation = findOwnedBy(caller, reservationId);
         reservations.findByPublicIdAtVersion(reservationId, version);
-        reservation.cancel(clock.instant());
+        reservation.cancel(today(), clock.instant());
         save(reservation);
         return ReservationView.of(reservation, today());
     }

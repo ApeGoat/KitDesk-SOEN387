@@ -136,9 +136,16 @@ public class Reservation {
         }
     }
 
-    /** Student cancels before pickup. Only a RESERVED reservation can be cancelled. */
-    public void cancel(Instant now) {
+    /**
+     * Student cancels before pickup. Only a RESERVED reservation, and not after its endDate (by
+     * then the booking has lapsed and is about to become EXPIRED), the same cut-off as pickup.
+     */
+    public void cancel(LocalDate today, Instant now) {
         requireStatus(ReservationStatus.RESERVED, "cancelled");
+        if (today.isAfter(endDate)) {
+            throw new DomainRuleViolation(DomainRuleViolation.INVALID_RESERVATION_STATE,
+                    "This reservation ended on " + endDate + " and has lapsed, so it can't be cancelled.");
+        }
         status = ReservationStatus.CANCELLED;
         cancelledAt = now;
     }

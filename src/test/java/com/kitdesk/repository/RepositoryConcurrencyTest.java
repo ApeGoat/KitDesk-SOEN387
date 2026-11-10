@@ -539,7 +539,7 @@ class RepositoryConcurrencyTest {
                 () -> tx().execute(s -> {
                     Reservation r = reservations.findByPublicIdAtVersion(resId, 0).orElseThrow();
                     await(bothRead);
-                    r.cancel(NOW);
+                    r.cancel(DAY0, NOW);
                     reservations.saveAndFlush(r);
                     return "cancel";
                 }),
@@ -573,7 +573,7 @@ class RepositoryConcurrencyTest {
                 DAY0, DAY0.plusDays(2), DAY0, NOW)).getPublicId());
 
         // The tablet read version 0, then the student cancelled (version 1).
-        tx().executeWithoutResult(s -> reservations.findByPublicIdAtVersion(resId, 0).orElseThrow().cancel(NOW));
+        tx().executeWithoutResult(s -> reservations.findByPublicIdAtVersion(resId, 0).orElseThrow().cancel(DAY0, NOW));
 
         // The tablet now tries a pickup with its stale version 0.
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx().executeWithoutResult(s ->

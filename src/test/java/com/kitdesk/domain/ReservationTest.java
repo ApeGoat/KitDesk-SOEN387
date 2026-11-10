@@ -90,24 +90,38 @@ class ReservationTest {
         @Test
         void cancelBeforePickup() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.cancel(NOW);
+            r.cancel(TODAY, NOW);
             assertThat(r.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
             assertThat(r.getCancelledAt()).isEqualTo(NOW);
             assertThat(r.isActive()).isFalse();
         }
 
         @Test
+        void cancelOnTheEndDateItselfIsAllowed() {
+            Reservation r = book(TODAY, TODAY.plusDays(2));
+            r.cancel(TODAY.plusDays(2), NOW);
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.CANCELLED);
+        }
+
+        @Test
+        void cancelAfterTheEndDateIsRefusedBecauseTheBookingHasLapsed() {
+            Reservation r = book(TODAY, TODAY.plusDays(2));
+            assertRule(() -> r.cancel(TODAY.plusDays(3), NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            assertThat(r.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        }
+
+        @Test
         void cannotCancelTwice() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
-            r.cancel(NOW);
-            assertRule(() -> r.cancel(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            r.cancel(TODAY, NOW);
+            assertRule(() -> r.cancel(TODAY, NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
         void cannotCancelAfterPickup() {
             Reservation r = book(TODAY, TODAY.plusDays(2));
             r.pickUp(TODAY, NOW, List.of(), List.of());
-            assertRule(() -> r.cancel(NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
+            assertRule(() -> r.cancel(TODAY, NOW), DomainRuleViolation.INVALID_RESERVATION_STATE);
         }
 
         @Test
@@ -222,7 +236,7 @@ class ReservationTest {
         @Test
         void cancelledBookingsInTheGapDoNotBlock() {
             Reservation bobCancelled = bobs(1, 2);
-            bobCancelled.cancel(NOW);
+            bobCancelled.cancel(TODAY, NOW);
             Reservation r = book(TODAY.plusDays(3), TODAY.plusDays(5));
             r.pickUp(TODAY, NOW, List.of(bobCancelled, r), List.of());
             assertThat(r.getStartDate()).isEqualTo(TODAY);
@@ -361,7 +375,7 @@ class ReservationTest {
         @Test
         void finishedBookingsDontCount() {
             Reservation cancelled = camera(1, 3);
-            cancelled.cancel(NOW);
+            cancelled.cancel(TODAY, NOW);
             check(cameras, 1, 3, List.of(cancelled));
         }
 
