@@ -806,6 +806,12 @@ components:
           type: string
           readOnly: true
           examples: [mdl_7c2e]
+        inService:
+          type: boolean
+          readOnly: true
+          description: |
+            False when the unit has been taken out of service. It is still
+            listed, but booking it is refused.
         reservations:
           type: array
           description: |
@@ -836,6 +842,21 @@ components:
         status:
           type: string
           enum: [RESERVED, PICKED_UP]
+        occupiedUntil:
+          type: string
+          format: date
+          readOnly: true
+          description: |
+            Last day the unit is busy because of this reservation. This is
+            `endDate`, except for gear that is `PICKED_UP` and past its end
+            date: it stays busy until it is returned, so this is today.
+        notReturned:
+          type: boolean
+          readOnly: true
+          description: |
+            True when the reservation is `PICKED_UP`, its `endDate` has
+            passed and the gear is not back yet (`occupiedUntil` is after
+            `endDate`).
 
     NewReservation:
       type: object

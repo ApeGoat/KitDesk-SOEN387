@@ -10,6 +10,8 @@ import com.kitdesk.repository.UnitRepository;
 import com.kitdesk.service.Views.CategoryView;
 import com.kitdesk.service.Views.ModelView;
 import com.kitdesk.service.Views.UnitView;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,9 +25,11 @@ public class CatalogueService {
     private final EquipmentModelRepository models;
     private final UnitRepository units;
     private final ReservationRepository reservations;
+    private final Clock clock;
 
     public CatalogueService(CategoryRepository categories, EquipmentModelRepository models,
-                            UnitRepository units, ReservationRepository reservations) {
+                            UnitRepository units, ReservationRepository reservations, Clock clock) {
+        this.clock = clock;
         this.categories = categories;
         this.models = models;
         this.units = units;
@@ -45,15 +49,17 @@ public class CatalogueService {
     }
 
     /**
-     * A model's units, each with the dates it is occupied (RESERVED or PICKED_UP bookings only).
+     * A model's units, each with the dates it is occupied (RESERVED or PICKED_UP bookings only),
+     * including out-of-service units ({@code inService = false}) so staff can still see them.
      *
      * @throws DomainRuleViolation NOT_FOUND if no model has this id
      */
     public List<UnitView> listUnits(String modelId) {
         EquipmentModel model = models.findByPublicId(modelId).orElseThrow(
                 () -> new DomainRuleViolation(ErrorCatalog.NOT_FOUND, "No model has the id " + modelId + "."));
+        LocalDate today = LocalDate.now(clock);
         return units.findByModelOrderByAssetTagAsc(model).stream()
-                .map(u -> UnitView.of(u, reservations.findActiveByUnit(u)))
+                .map(u -> UnitView.of(u, reservations.findActiveByUnit(u), today))
                 .toList();
     }
 }

@@ -58,6 +58,34 @@ class CatalogueApiTest extends ApiTestBase {
     }
 
     @Test
+    void anOverdueUnitShowsItIsBusyUntilItComesBack() {
+        insertReservation("bob@kitdesk.test", "CAM-R5-01", TODAY.minusDays(4), TODAY.minusDays(2), "PICKED_UP");
+        insertReservation("bob@kitdesk.test", "CAM-R5-02", TODAY, TODAY.plusDays(2), "PICKED_UP");
+        String token = token("alice@kitdesk.test");
+        String r5 = get("/models?category=CAMERA", token).body().path("models").get(0).path("id").asText();
+
+        JsonNode units = get("/models/" + r5 + "/units", token).body().path("units");
+        JsonNode overdue = units.get(0).path("reservations").get(0);
+        assertThat(overdue.path("endDate").asText()).isEqualTo(TODAY.minusDays(2).toString());
+        assertThat(overdue.path("occupiedUntil").asText()).isEqualTo(TODAY.toString());
+        assertThat(overdue.path("notReturned").asBoolean()).isTrue();
+        JsonNode onTime = units.get(1).path("reservations").get(0);
+        assertThat(onTime.path("occupiedUntil").asText()).isEqualTo(TODAY.plusDays(2).toString());
+        assertThat(onTime.path("notReturned").asBoolean()).isFalse();
+    }
+
+    @Test
+    void anOutOfServiceUnitIsListedButMarkedAsNotInService() {
+        jdbc.update("UPDATE units SET active = FALSE WHERE asset_tag = 'CAM-R5-03'");
+        String token = token("alice@kitdesk.test");
+        String r5 = get("/models?category=CAMERA", token).body().path("models").get(0).path("id").asText();
+
+        JsonNode units = get("/models/" + r5 + "/units", token).body().path("units");
+        assertThat(field(units, "assetTag")).containsExactly("CAM-R5-01", "CAM-R5-02", "CAM-R5-03");
+        assertThat(field(units, "inService")).containsExactly("true", "true", "false");
+    }
+
+    @Test
     void unknownModelIs404() {
         Resp r = get("/models/mdl_nope/units", token("alice@kitdesk.test"));
         assertThat(r.status()).isEqualTo(404);

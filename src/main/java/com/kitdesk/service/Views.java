@@ -36,15 +36,26 @@ public final class Views {
         }
     }
 
-    public record UnitBookingView(LocalDate startDate, LocalDate endDate, ReservationStatus status) {
+    /**
+     * One booking on a unit's calendar. {@code occupiedUntil} is the last day the unit is busy:
+     * the end date, or today for gear that is picked up and not returned yet
+     * ({@code notReturned}), since an overdue unit stays busy until it comes back.
+     */
+    public record UnitBookingView(LocalDate startDate, LocalDate endDate, ReservationStatus status,
+                                  LocalDate occupiedUntil, boolean notReturned) {
+        static UnitBookingView of(Reservation r, LocalDate today) {
+            LocalDate until = r.occupiedUntil(today);
+            return new UnitBookingView(r.getStartDate(), r.getEndDate(), r.getStatus(),
+                    until, until.isAfter(r.getEndDate()));
+        }
     }
 
-    public record UnitView(String id, String assetTag, String modelId, List<UnitBookingView> reservations) {
-        static UnitView of(Unit u, List<Reservation> active) {
-            return new UnitView(u.getPublicId(), u.getAssetTag(), u.getModel().getPublicId(),
-                    active.stream()
-                            .map(r -> new UnitBookingView(r.getStartDate(), r.getEndDate(), r.getStatus()))
-                            .toList());
+    /** {@code inService} is false for a unit taken out of service: it is listed but can't be booked. */
+    public record UnitView(String id, String assetTag, String modelId, boolean inService,
+                           List<UnitBookingView> reservations) {
+        static UnitView of(Unit u, List<Reservation> active, LocalDate today) {
+            return new UnitView(u.getPublicId(), u.getAssetTag(), u.getModel().getPublicId(), u.isActive(),
+                    active.stream().map(r -> UnitBookingView.of(r, today)).toList());
         }
     }
 
