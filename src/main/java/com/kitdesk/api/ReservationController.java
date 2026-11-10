@@ -67,7 +67,10 @@ public class ReservationController {
         return reservations.get(caller, reservationId);
     }
 
-    @PostMapping("/reservations")
+    // The body is read as a raw String (so the idempotency check can run before parsing), and
+    // Spring hands a String over whatever the Content-Type says. consumes keeps it to JSON: any
+    // other type is a 415 before anything is booked or saved.
+    @PostMapping(path = "/reservations", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(Caller caller, HttpServletRequest request,
                                          @RequestHeader(name = KEY_HEADER, required = false) String key,
                                          @RequestBody(required = false) String body) {

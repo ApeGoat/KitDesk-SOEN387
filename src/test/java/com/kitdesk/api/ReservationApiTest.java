@@ -19,6 +19,18 @@ class ReservationApiTest extends ApiTestBase {
     class Booking {
 
         @Test
+        void aBookingSentAsPlainTextIs415AndBooksNothing() {
+            Resp r = send("POST", "/reservations", token(ALICE),
+                    bookingBody(unitId("CAM-R5-01"), TODAY.plusDays(1), TODAY.plusDays(3)),
+                    "Content-Type", "text/plain", "Idempotency-Key", newKey());
+
+            assertThat(r.status()).isEqualTo(415);
+            assertThat(r.code()).isEqualTo("UNSUPPORTED_MEDIA_TYPE");
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM reservations", Integer.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM idempotency_keys", Integer.class)).isZero();
+        }
+
+        @Test
         void createsAReservationInTheContractShape() {
             Resp r = book(ALICE, "CAM-R5-01", 1, 3);
             assertThat(r.status()).isEqualTo(201);
