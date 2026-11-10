@@ -297,12 +297,22 @@ class ReservationApiTest extends ApiTestBase {
         }
 
         @Test
-        void staffCantCancelAndGet403() {
+        void staffCanCancelAStudentsBooking() {
             String id = book(BOB, "CAM-R5-01", 1, 2).text("id");
             Resp r = change(STAFF, id, "cancel", 0);
-            assertThat(r.status()).isEqualTo(403);
-            assertThat(r.code()).isEqualTo("FORBIDDEN");
-            assertThat(get("/reservations/" + id, token(BOB)).text("status")).isEqualTo("RESERVED");
+            assertThat(r.status()).isEqualTo(200);
+            assertThat(r.text("status")).isEqualTo("CANCELLED");
+            assertThat(r.body().path("student").path("email").asText()).isEqualTo(BOB);
+            assertThat(get("/reservations/" + id, token(BOB)).text("status")).isEqualTo("CANCELLED");
+            assertThat(book(ALICE, "CAM-R5-01", 1, 2).status()).isEqualTo(201);   // the unit is free again
+        }
+
+        @Test
+        void staffCantCancelAPickedUpBooking() {
+            String id = insertReservation(BOB, "CAM-R5-01", TODAY.minusDays(1), TODAY.plusDays(1), "PICKED_UP");
+            Resp r = change(STAFF, id, "cancel", 0);
+            assertThat(r.status()).isEqualTo(409);
+            assertThat(r.code()).isEqualTo("INVALID_RESERVATION_STATE");
         }
     }
 

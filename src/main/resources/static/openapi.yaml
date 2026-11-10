@@ -380,10 +380,11 @@ paths:
       tags: [Reservations]
       summary: Cancel a reservation
       description: |
-        Cancels a `RESERVED` reservation owned by the calling student, before
-        pickup and no later than its `endDate`. A reservation that has been
-        picked up, returned, cancelled or expired cannot be cancelled.
-        Students only: staff get 403 `FORBIDDEN`.
+        Cancels a `RESERVED` reservation before pickup, no later than its
+        `endDate`. A student may cancel only their own reservations; staff
+        may cancel any student's (for example, when the unit is broken). A
+        reservation that has been picked up, returned, cancelled or expired
+        cannot be cancelled.
 
         NOT safe and not naturally idempotent: a second cancel would fail on
         state or version. The `Idempotency-Key` makes retries safe, and the
@@ -405,9 +406,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-          description: "`FORBIDDEN`: the caller is staff. Only students cancel. Not retryable."
         "404":
           $ref: "#/components/responses/NotFound"
           description: "`NOT_FOUND`: no reservation has this id, or it belongs to another student."
@@ -1178,11 +1176,10 @@ components:
       note: After logging in again, the same request may be resent with the same key.
     - code: FORBIDDEN
       status: 403
-      when: The caller's role does not allow the operation (a student calling a staff-only operation, or staff creating or cancelling a reservation).
+      when: The caller's role does not allow the operation (a student calling a staff-only operation, or staff creating a reservation).
       operations:
         [
           createReservation,
-          cancelReservation,
           pickupReservation,
           returnReservation,
           listNotifications,

@@ -17,6 +17,8 @@ import java.time.LocalDate;
 import java.util.List;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,12 +29,15 @@ import org.springframework.transaction.annotation.Transactional;
  * many reservations (subscription, overdue lock-out, and the category limit, where this class
  * loads the student's overlapping rentals under the student lock and
  * {@code Reservation.checkCategoryLimit} counts them per day), the per-user rules (a
- * student only sees and cancels their own bookings; pickup and return are staff-only), and the
+ * student only sees and cancels their own bookings, staff can see and cancel anyone's; pickup and
+ * return are staff-only), and the
  * lock order: <b>student row first, then unit row</b>, always. Rules about one reservation's own
  * data (date window, status changes, early pickup) are the entities' job; this class calls them.
  */
 @Service
 public class ReservationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReservationService.class);
 
     /** What a student asks for when booking. Parsed and shape-checked by the interface layer. */
     public record NewBooking(String unitId, LocalDate startDate, LocalDate endDate) {
@@ -125,15 +130,22 @@ public class ReservationService {
         return view(caller, reservation, today);
     }
 
-    /** The student cancels their own RESERVED booking. Staff don't cancel (the contract has no such case). */
+    /**
+     * Cancels a RESERVED booking: a student their own (anyone else's is NOT_FOUND), staff anyone's,
+     * for example when the unit breaks. The same rules apply either way (RESERVED, not lapsed).
+     */
     @Transactional
     public ReservationView cancel(Caller caller, String reservationId, Integer expectedVersion) {
-        Access.require(caller, Role.STUDENT);   // cancelling is the student's own call; staff get 403
         int version = requireVersion(expectedVersion);
-        Reservation reservation = findOwnedBy(caller, reservationId);
+        // A student cancels their own booking; staff can cancel anyone's (say, the unit broke).
+        Reservation reservation = findVisible(caller, reservationId);
         reservations.findByPublicIdAtVersion(reservationId, version);
         reservation.cancel(today(), clock.instant());
         save(reservation);
+        if (caller.isStaff()) {
+            log.info("Staff user {} cancelled reservation {}", caller.userId(), reservation.getPublicId());
+            // TODO(outbox): tell the student their booking was cancelled by the desk.
+        }
         return view(caller, reservation, today());
     }
 
@@ -216,14 +228,6 @@ public class ReservationService {
     private Reservation findVisible(Caller caller, String reservationId) {
         Reservation r = findOrNotFound(reservationId);
         if (caller.isStaff() || r.getStudent().getId().equals(caller.userId())) {
-            return r;
-        }
-        throw notFound(reservationId);
-    }
-
-    private Reservation findOwnedBy(Caller caller, String reservationId) {
-        Reservation r = findOrNotFound(reservationId);
-        if (caller.isStudent() && r.getStudent().getId().equals(caller.userId())) {
             return r;
         }
         throw notFound(reservationId);
