@@ -1,0 +1,7 @@
+# Keep line endings stable whatever OS checks the repo out.
+* text=auto
+# Shell scripts must keep LF even on Windows, or Linux (Docker) can't run them.
+mvnw text eol=lf
+*.sh text eol=lf
+# Windows scripts keep CRLF.
+*.cmd text eol=crlf
